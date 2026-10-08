@@ -17,7 +17,7 @@ const User = require('../models/User');
 const Category = require('../models/Category');
 const Product = require('../models/Product');
 const { classifyProduct } = require('../services/computerVision');
-const { IMAGENET_TO_CATEGORY, CONFIDENCE_THRESHOLD } = require('../services/imageClassifier');
+const { classifyImage, IMAGENET_TO_CATEGORY, CONFIDENCE_THRESHOLD } = require('../services/imageClassifier');
 
 const extractToken = (res) => {
   const setCookie = res.headers['set-cookie'] || [];
@@ -201,6 +201,62 @@ describe('Price Suggestion & Image Classification', () => {
       expect(typeof CONFIDENCE_THRESHOLD).toBe('number');
       expect(CONFIDENCE_THRESHOLD).toBeGreaterThan(0);
       expect(CONFIDENCE_THRESHOLD).toBeLessThan(1);
+    });
+
+    // ──── 7. Real inference (regression guard for the /255 preprocessing bug) ────
+
+    describe('imageClassifier real inference', () => {
+      const fs = require('fs');
+      const path = require('path');
+
+      const loadFixture = (name) => {
+        const p = path.join(__dirname, 'fixtures', name);
+        return fs.existsSync(p) ? fs.readFileSync(p) : null;
+      };
+
+      it('produces a confident (non-uniform) top-1 prediction on the smoke fixture', async () => {
+        const buf = loadFixture('classify-smoke.jpg');
+        if (!buf) {
+          console.warn('SKIP: backend/src/__tests__/fixtures/classify-smoke.jpg not found');
+          return;
+        }
+
+        const result = await classifyImage(buf);
+
+        if (result.source === 'unavailable') {
+          console.warn('SKIP: MobileNet model unavailable (no network / no weights)');
+          return;
+        }
+
+        // The /255 preprocessing bug collapses the input to near-black and
+        // yields near-uniform predictions (~0.001 top-1). A healthy model
+        // is always more confident than this on any real photo.
+        expect(result.source).toBe('mobilenet');
+        expect(result.topLabels.length).toBeGreaterThan(0);
+        expect(result.topLabels[0].probability).toBeGreaterThan(0.05);
+      }, 120000);
+
+      it('maps a known labeled fixture to the expected category', async () => {
+        const buf = loadFixture('classify-sneaker.jpg');
+        if (!buf) {
+          console.warn(
+            'SKIP: backend/src/__tests__/fixtures/classify-sneaker.jpg not found — drop a clear product photo at this path to enable the labeled assertion'
+          );
+          return;
+        }
+
+        const result = await classifyImage(buf);
+
+        if (result.source === 'unavailable') {
+          console.warn('SKIP: MobileNet model unavailable (no network / no weights)');
+          return;
+        }
+
+        expect(result.source).toBe('mobilenet');
+        expect(result.confidence).toBeGreaterThanOrEqual(0.15);
+        expect(result.category).not.toBe('Other');
+        expect(result.topLabels.length).toBeGreaterThan(0);
+      }, 120000);
     });
   });
 });

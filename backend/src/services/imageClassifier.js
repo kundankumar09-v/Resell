@@ -247,12 +247,12 @@ const classifyImage = async (imageBuffer) => {
       .raw()
       .toBuffer({ resolveWithObject: true });
 
-    // Convert uint8 raw pixels to a float32 tensor [1, 224, 224, 3]
-    const floatData = new Float32Array(data.length);
-    for (let i = 0; i < data.length; i++) {
-      floatData[i] = data[i] / 255.0;
-    }
-    tensor = tf.tensor4d(floatData, [1, 224, 224, 3]);
+    // Pass raw 0-255 pixels as a 3D float tensor [224, 224, 3].
+    // @tensorflow-models/mobilenet@2.1.1 normalizes internally (inputRange
+    // [0,1] over raw 0-255 input), so pre-dividing by 255 here collapses the
+    // effective input to near-black and yields near-uniform predictions.
+    // The 3D shape also skips mobilenet's redundant resizeBilinear path.
+    const tensor = tf.tensor3d(new Float32Array(data), [224, 224, 3], 'float32');
 
     // Classify
     const predictions = await m.classify(tensor, 10);
