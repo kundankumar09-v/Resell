@@ -606,6 +606,7 @@ export default function Chat() {
                       ) : (
                         messages.map((msg) => {
                           const isMe = msg.sender._id === user._id;
+                          const outgoing = isMe;
                           const readByOthers = msg.readBy?.some(
                             (r) => r.user !== user._id
                           );
