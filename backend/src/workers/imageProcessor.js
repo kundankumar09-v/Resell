@@ -2,7 +2,10 @@ const { Worker } = require('bullmq');
 const queues = require('../queues');
 const Product = require('../models/Product');
 const Category = require('../models/Category');
-const { perceptualHashFromBuffer } = require('../services/imageHash');
+const {
+  perceptualHashFromBuffer,
+  mirrorPerceptualHashFromBuffer,
+} = require('../services/imageHash');
 const { createCVProvider } = require('../services/cvAdapter');
 const { extractColorHistogram, downloadImageBuffer } = require('../services/imageUtils');
 const cvProvider = createCVProvider();
@@ -46,7 +49,8 @@ const { detectRisk } = require('../services/fraudDetection');
         // Images were already uploaded to Cloudinary during the request.
         // Reuse the existing URL/publicId instead of uploading again.
         const hash = await perceptualHashFromBuffer(buffer);
-        
+        const mirrorHash = await mirrorPerceptualHashFromBuffer(buffer);
+
         // Extract color histogram
         const colorHistogram = await extractColorHistogram(buffer);
 
@@ -63,6 +67,7 @@ const { detectRisk } = require('../services/fraudDetection');
           url: image.url,
           publicId: image.publicId,
           hash,
+          mirrorHash,
           colorHistogram,
           analysis: {
             conditionScore: condition.score,
@@ -231,6 +236,18 @@ const { detectRisk } = require('../services/fraudDetection');
       const isFlagged = isHighRisk || mlFraud.isFlagged;
       const flagReason = mlFraud.fraudReasons?.length > 0 ? mlFraud.fraudReasons.join('; ') : '';
 
+      // Preserve previously stored hashes — the edit path may have stored
+      // mirror hashes, and overwriting here would silently erase them
+      // (data loss on every background run). Merge: keep all existing
+      // entries, add the new unique normal + mirror hashes.
+      const stored = await Product.findById(productId)
+        .select('aiAnalysis.imageHashes')
+        .lean();
+      const newHashes = results.flatMap((r) => [r.hash, r.mirrorHash]).filter(Boolean);
+      const mergedHashes = [
+        ...new Set([...(stored?.aiAnalysis?.imageHashes || []), ...newHashes]),
+      ];
+
       const product = await Product.findByIdAndUpdate(
         productId,
         {
@@ -262,7 +279,7 @@ const { detectRisk } = require('../services/fraudDetection');
             damageConfidence: damageScores.length > 0 ? 0.6 : 0.3,
             visualAnalysisAvailable: avgCondition !== null || avgDamage !== null,
             damageDescription: '',
-            imageHashes: results.map((r) => r.hash).filter(Boolean),
+            imageHashes: mergedHashes,
             priceRecommendation: {
               recommendedPrice: finalSuggestedPrice,
               minPrice: finalPriceRange.min,

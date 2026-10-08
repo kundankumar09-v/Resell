@@ -164,13 +164,16 @@ const uploadImages = async (req, res, next) => {
       throw new AppError('No images provided', 400, 'NO_FILES');
     }
 
-    // Phase 1: Compute perceptual hashes for ALL incoming images before any
-    // Cloudinary upload. This ensures we can reject duplicates without leaving
-    // orphaned files on Cloudinary.
+    // Phase 1: Compute perceptual hashes (normal + mirrored variant) for ALL
+    // incoming images before any Cloudinary upload. This ensures we can reject
+    // duplicates without leaving orphaned files on Cloudinary. The mirrored
+    // hash counters the flipped-image evasion tactic: a mirrored stolen
+    // upload's own hash matches the original's mirror hash.
     const fileHashes = [];
     for (const file of req.files) {
       const hash = await perceptualHashFromBuffer(file.buffer);
-      fileHashes.push({ file, hash });
+      const mirrorHash = await mirrorPerceptualHashFromBuffer(file.buffer);
+      fileHashes.push({ file, hash, mirrorHash });
     }
 
     // Phase 2: Check each hash against existing active/sold products.
@@ -179,7 +182,13 @@ const uploadImages = async (req, res, next) => {
     // POST /api/products, so trusting a category field here would let a
     // seller scope the check away from the listing that holds the
     // original image. Limited to 500 candidates for performance.
-    for (const { hash } of fileHashes) {
+    //
+    // BOTH hashes are probed against every stored entry. Stored
+    // aiAnalysis.imageHashes is a flat list intentionally mixing normal and
+    // mirror entries: incoming-normal vs stored-mirror catches flipped
+    // re-uploads of fixed rows; incoming-mirror vs stored-normal catches
+    // legacy rows that never stored mirrors.
+    for (const { hash, mirrorHash } of fileHashes) {
       const candidateFilter = {
         status: { $in: ['active', 'sold'] },
         'aiAnalysis.imageHashes': { $exists: true, $ne: [] },
@@ -189,17 +198,20 @@ const uploadImages = async (req, res, next) => {
         .select('title seller aiAnalysis.imageHashes')
         .limit(500);
 
-      for (const candidate of candidates) {
-        const candidateHashes = candidate.aiAnalysis?.imageHashes || [];
-        for (const candidateHash of candidateHashes) {
-          const distance = hammingDistance(hash, candidateHash);
-          if (distance <= DUPLICATE_HASH_THRESHOLD) {
-            const similarityPct = Math.round((1 - distance / 64) * 100);
-            throw new AppError(
-              `Duplicate image detected (~${similarityPct}% similar to existing listing "${candidate.title}"). This image is already used in another listing.`,
-              409,
-              'DUPLICATE_IMAGE'
-            );
+      for (const probe of [hash, mirrorHash]) {
+        if (!probe) continue;
+        for (const candidate of candidates) {
+          const candidateHashes = candidate.aiAnalysis?.imageHashes || [];
+          for (const candidateHash of candidateHashes) {
+            const distance = hammingDistance(probe, candidateHash);
+            if (distance <= DUPLICATE_HASH_THRESHOLD) {
+              const similarityPct = Math.round((1 - distance / 64) * 100);
+              throw new AppError(
+                `Duplicate image detected (~${similarityPct}% similar to existing listing "${candidate.title}"). This image is already used in another listing.`,
+                409,
+                'DUPLICATE_IMAGE'
+              );
+            }
           }
         }
       }
@@ -207,11 +219,13 @@ const uploadImages = async (req, res, next) => {
 
     // Phase 3: All hashes are unique — proceed with Cloudinary upload + CV analysis.
     const results = [];
-    for (const file of req.files) {
+      for (const file of req.files) {
       let uploaded = null;
       try {
         uploaded = await uploadToCloudinary(file.buffer, 'resell/products');
-        const hash = fileHashes.find((fh) => fh.file === file)?.hash;
+        const stored = fileHashes.find((fh) => fh.file === file) || {};
+        const hash = stored.hash;
+        const mirrorHash = stored.mirrorHash;
 
         // CV analysis
         const [condition, damage, classification] = await Promise.all([
@@ -229,6 +243,7 @@ const uploadImages = async (req, res, next) => {
           width: uploaded.width,
           height: uploaded.height,
           hash,
+          mirrorHash,
           analysis: {
             conditionScore: condition.score,
             damageScore: damage.score,
@@ -277,6 +292,7 @@ const uploadImages = async (req, res, next) => {
         width: r.width,
         height: r.height,
         hash: r.hash,
+        mirrorHash: r.mirrorHash,
       })),
       analysis: {
         conditionScore: avgCondition !== null ? Math.round(avgCondition) : null,
@@ -419,6 +435,13 @@ const createProduct = async (req, res, next) => {
       );
     }
 
+    // NOTE: creation deliberately does NOT hard-block duplicate hashes. The
+    // hard 409 gate lives at upload-images (where the raw image bytes are
+    // verified server-side). At creation, duplicate hashes flow through the
+    // fraud engine's detectRisk() as a +35 risk signal instead — visual
+    // similarity alone is never proof of fraud, and identity-verified
+    // transfers / legitimate relists may reuse the same image.
+
     // ── Product identity verification (extension) ──────────────────────
     // For eligible categories with a serial/IMEI/VIN, verify physical
     // ownership. Existing fraud checks (pHash, MobileNet, trust) still run.
@@ -511,7 +534,7 @@ const createProduct = async (req, res, next) => {
         conditionScore: 0,
         damageScore: 0,
         damageDescription: '',
-        imageHashes: (images || []).map((i) => i.hash).filter(Boolean),
+        imageHashes: (images || []).flatMap((i) => [i?.hash, i?.mirrorHash]).filter(Boolean),
         priceRecommendation: {
           recommendedPrice: 0,
           minPrice: 0,
