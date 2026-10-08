@@ -201,7 +201,11 @@ describe('Product Routes', () => {
         })
         .expect(400);
 
-      expect(res.body.code).toBe('TOO_FEW_IMAGES');
+      // The 3-image minimum is enforced in ONE place (validation middleware,
+      // sharing MIN_IMAGES with the controller via src/constants.js) — a
+      // 2-image listing now gets a single consistent validation error.
+      expect(res.body.code).toBe('VALIDATION_ERROR');
+      expect(res.body.message).toMatch(/3 images/i);
       expect(await Product.countDocuments({ title: 'Two-view Product' })).toBe(0);
     });
 

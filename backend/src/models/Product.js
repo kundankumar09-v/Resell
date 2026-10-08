@@ -162,7 +162,11 @@ const productSchema = new mongoose.Schema(
         generatedAt: { type: Date, default: Date.now },
         refinedAt: { type: Date, default: null },
         refinementAttempts: { type: Number, default: 0 },
-        source: { type: String, enum: ['ml-model', 'heuristic'], default: 'heuristic' },
+        source: {
+          type: String,
+          enum: ['ml-model', 'heuristic', 'ml-service', 'insufficient_data'],
+          default: 'heuristic',
+        },
       },
       riskAssessment: {
         riskScore: { type: Number, default: 0, min: 0, max: 100 },

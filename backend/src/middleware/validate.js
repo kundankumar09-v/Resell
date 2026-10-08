@@ -1,5 +1,6 @@
 const { body, param, query, validationResult } = require('express-validator');
 const AppError = require('../utils/AppError');
+const SHARED_LIMITS = require('../constants');
 
 const handleValidation = (req, res, next) => {
   const errors = validationResult(req);
@@ -58,7 +59,7 @@ const createProductValidation = [
   body('location.city').optional().isString(),
   body('location.state').optional().isString(),
   body('location.country').optional().isString(),
-  body('images').isArray({ min: 1 }).withMessage('At least one image is required'),
+  body('images').isArray({ min: SHARED_LIMITS.MIN_IMAGES }).withMessage('At least 3 images are required'),
   body('images.*.url').notEmpty().withMessage('Image URL is required').isURL().withMessage('Invalid image URL'),
   body('images.*.publicId').notEmpty().withMessage('Image publicId is required'),
   body('images.*.hash').optional().isString(),

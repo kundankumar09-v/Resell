@@ -13,6 +13,7 @@ const {
   hammingDistance,
 } = require('../services/imageHash');
 const computerVision = require('../services/computerVision');
+const SHARED_LIMITS = require('../constants');
 const { calculateRecommendedPrice } = require('../services/priceRecommendation');
 const { detectRisk } = require('../services/fraudDetection');
 const {
@@ -155,8 +156,11 @@ const getProduct = async (req, res, next) => {
 // Distance 13+: genuinely different images.
 // Threshold of 12 matches fraudDetection.js HASH_SIMILARITY_THRESHOLD and is
 // validated against real photographs with a margin of 18 points to the next
-// same-category different-product minimum distance (30).
-const DUPLICATE_HASH_THRESHOLD = 12;
+// same-category different-product minimum distance (30). The
+// DUPLICATE_HASH_THRESHOLD env var (defaulted in config/validateEnv.js)
+// overrides the shared default at runtime.
+const DUPLICATE_HASH_THRESHOLD =
+  Number(process.env.DUPLICATE_HASH_THRESHOLD) || SHARED_LIMITS.DUPLICATE_HASH_THRESHOLD;
 
 const uploadImages = async (req, res, next) => {
   try {
@@ -420,14 +424,14 @@ const createProduct = async (req, res, next) => {
     // server — never the client — determines the final valid image count.
     // Sellers are guided toward: front/main, back, side/detail and an
     // optional condition/serial area (see SellProduct guidance).
-    if (!images || !Array.isArray(images) || images.length < 3) {
+    if (!images || !Array.isArray(images) || images.length < SHARED_LIMITS.MIN_IMAGES) {
       throw new AppError(
         'At least 3 images are required: a front/main view, a back view and a side or detail view. Recommended: 4-6 images.',
         400,
         'TOO_FEW_IMAGES'
       );
     }
-    if (images.length > 8) {
+    if (images.length > SHARED_LIMITS.MAX_IMAGES) {
       throw new AppError(
         'A listing can have at most 8 images. Please remove the extra images.',
         400,

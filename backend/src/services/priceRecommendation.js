@@ -112,13 +112,6 @@ const calculateRecommendedPrice = async ({
 
   let recommendedPrice = 0;
 
-  console.log(
-    `[PriceRec] inputs: category=${categoryName || '∅'} brand=${brand || '∅'} ` +
-      `original=${original} years=${years} condition=${condition} ` +
-      `cvScore=${cvConditionScore ?? '∅'} damageScore=${damageScore ?? '∅'} ` +
-      `comparables=${comparableListings.length}`
-  );
-
   if (original > 0) {
     // Depreciation-based estimate
     const depRate = depreciationForCategory(categoryName);
@@ -207,10 +200,6 @@ const calculateRecommendedPrice = async ({
   }
 
   if (recommendedPrice <= 0) {
-    console.warn(
-      `[PriceRec] insufficient data: original=${original} comparables=${comparableListings.length} ` +
-        `category=${categoryName || '∅'} brand=${brand || '∅'}`
-    );
     return {
       recommendedPrice: 0,
       minPrice: 0,
@@ -245,10 +234,6 @@ const calculateRecommendedPrice = async ({
     source,
   };
 
-  console.log(
-    `[PriceRec] result: recommended=${result.recommendedPrice} ` +
-      `range=${result.minPrice}..${result.maxPrice} confidence=${result.confidence}`
-  );
   return result;
 };
 

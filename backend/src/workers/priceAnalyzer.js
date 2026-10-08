@@ -26,8 +26,8 @@ async function refinePrice(productId) {
     originalPrice: product.originalPrice,
     yearsUsed: product.yearsUsed,
     condition: product.condition,
-    cvConditionScore: product.aiAnalysis?.conditionScore || null,
-    damageScore: product.aiAnalysis?.damageScore || null,
+    cvConditionScore: product.aiAnalysis?.conditionScore == null ? null : product.aiAnalysis.conditionScore,
+    damageScore: product.aiAnalysis?.damageScore == null ? null : product.aiAnalysis.damageScore,
     specifications: product.specifications,
     comparableListings: comparables,
   });
