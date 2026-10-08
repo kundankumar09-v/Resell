@@ -1,0 +1,10 @@
+{
+  "started_at": 1790867914.7087343,
+  "retrained": [
+    "fraud",
+    "price"
+  ],
+  "finished_at": 1790867935.415422,
+  "duration_s": 20.7,
+  "drift_report": "C:\\Users\\vkund\\OneDrive\\Desktop\\Resell\\ml-service\\training\\..\\pipeline\\..\\models_saved\\drift_report_20261001_204834.json"
+}

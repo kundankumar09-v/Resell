@@ -69,10 +69,10 @@ export const sellerService = {
 
 export const offerService = {
   create: (data) => api.post('/offers', data),
-  list: (params) => api.get('/offers', { params }),
-  get: (id) => api.get(`/offers/${id}`),
-  mine: () => api.get('/offers/mine'),
-  received: () => api.get('/offers/received'),
+  list: (params) => api.get('/offers', { params, _noCache: true }),
+  get: (id) => api.get(`/offers/${id}`, { _noCache: true }),
+  mine: () => api.get('/offers/mine', { _noCache: true }),
+  received: () => api.get('/offers/received', { _noCache: true }),
   update: (id, data) => api.put(`/offers/${id}`, data),
   accept: (id) => api.post(`/offers/${id}/accept`),
   reject: (id) => api.post(`/offers/${id}/reject`),

@@ -1,4 +1,4 @@
-const request = require('supertest');
+﻿const request = require('supertest');
 const mongoose = require('mongoose');
 const { app, server } = require('../server');
 const User = require('../models/User');
@@ -32,6 +32,15 @@ const createUserAndLogin = async (name, role = 'seller') => {
   return { user, token: extractToken(res) };
 };
 
+
+// Minimum 3 images (multi-angle requirement): the given first image plus two
+// padding images whose hashes are pairwise >13 hamming distance from every
+// fixture hash in this suite (verified computationally).
+const threeImages = (first) => [
+  first,
+  { url: 'https://example.com/pad-1.jpg', publicId: 'pad-1', hash: 'c42a171d4bccc04d' },
+  { url: 'https://example.com/pad-2.jpg', publicId: 'pad-2', hash: '840074e0679d14f1' },
+];
 describe('Proof of Possession & Stolen Product Integration', () => {
   let categoryId;
   let seller;
@@ -76,7 +85,7 @@ describe('Proof of Possession & Stolen Product Integration', () => {
         category: categoryId,
         brand: 'Apple',
         condition: 'good',
-        images: [{ url: 'https://example.com/img.jpg', publicId: 'img', hash: 'aabbccdd11223344' }],
+        images: threeImages({ url: 'https://example.com/img.jpg', publicId: 'img', hash: 'aabbccdd11223344' }),
         specifications: [],
         identifier: RAW_IMEI,
         identifierType: 'imei',
@@ -161,7 +170,7 @@ describe('Proof of Possession & Stolen Product Integration', () => {
       const identity = await ProductIdentity.findOne({ productId });
       expect(identity.verification.possessionStatus).toBe('failed');
       expect(identity.verification.attempts).toBe(1);
-      // Listing itself is untouched — failed possession is a signal, not a block
+      // Listing itself is untouched â€” failed possession is a signal, not a block
       const product = await Product.findById(productId);
       expect(product.status).toBe('active');
     });
@@ -295,7 +304,7 @@ describe('Proof of Possession & Stolen Product Integration', () => {
 
       const blocked = await createListing(sellerToken, {
         title: 'Try to relist stolen phone',
-        images: [{ url: 'https://example.com/img2.jpg', publicId: 'img2', hash: 'ffffffff00000001' }],
+        images: threeImages({ url: 'https://example.com/img2.jpg', publicId: 'img2', hash: 'ffffffff00000001' }),
       });
       expect(blocked.status).toBe(403);
       expect(blocked.body.code).toBe('IDENTITY_BLOCKED');
@@ -303,7 +312,7 @@ describe('Proof of Possession & Stolen Product Integration', () => {
       // A different seller is blocked too
       const blockedOther = await createListing(otherSellerToken, {
         title: 'Another seller tries the same IMEI',
-        images: [{ url: 'https://example.com/img3.jpg', publicId: 'img3', hash: 'ffffffff00000002' }],
+        images: threeImages({ url: 'https://example.com/img3.jpg', publicId: 'img3', hash: 'ffffffff00000002' }),
       });
       expect(blockedOther.status).toBe(403);
       expect(blockedOther.body.code).toBe('IDENTITY_BLOCKED');
@@ -324,7 +333,7 @@ describe('Proof of Possession & Stolen Product Integration', () => {
       // Owner can list again
       const relist = await createListing(sellerToken, {
         title: 'Relisted after false report',
-        images: [{ url: 'https://example.com/img4.jpg', publicId: 'img4', hash: 'ffffffff00000003' }],
+        images: threeImages({ url: 'https://example.com/img4.jpg', publicId: 'img4', hash: 'ffffffff00000003' }),
       });
       expect(relist.status).toBe(201);
     });
@@ -348,7 +357,7 @@ describe('Proof of Possession & Stolen Product Integration', () => {
 
       const resale = await createListing(otherSellerToken, {
         title: 'Legit resale of same phone',
-        images: [{ url: 'https://example.com/img5.jpg', publicId: 'img5', hash: 'ffffffff00000004' }],
+        images: threeImages({ url: 'https://example.com/img5.jpg', publicId: 'img5', hash: 'ffffffff00000004' }),
       }).expect(201);
 
       expect(resale.body.identityStatus.status).toBe('active');

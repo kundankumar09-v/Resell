@@ -16,7 +16,10 @@ const productIdentitySchema = new mongoose.Schema(
     },
     identifierType: {
       type: String,
-      enum: ['imei', 'serial', 'vin'],
+      // 'visual': possession-based identity for products without any
+      // standardized identifier (SCRUM-25). The hash is derived from the
+      // listing id itself — no sensitive identifier is involved.
+      enum: ['imei', 'serial', 'vin', 'visual'],
       required: true,
     },
     identifierHash: {

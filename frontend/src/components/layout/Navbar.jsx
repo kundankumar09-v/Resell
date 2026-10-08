@@ -19,6 +19,8 @@ import {
   Shield,
   ArrowLeftRight,
   Package,
+  Moon,
+  Sun,
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useSocket } from '../../contexts/SocketContext';
@@ -26,9 +28,11 @@ import { notificationService } from '../../services/services';
 import { cn, formatRelativeTime } from '../../utils/format';
 import MagneticButton from '../ui/MagneticButton';
 import CurrencySelector from '../ui/CurrencySelector';
+import { useTheme } from '../../contexts/ThemeContext';
 
 export default function Navbar() {
   const { user, logout } = useAuth();
+  const { theme, toggleTheme } = useTheme();
   const { totalUnread, unreadNotifications, setUnreadNotifications } = useSocket() || {};
   const navigate = useNavigate();
   const location = useLocation();
@@ -367,17 +371,52 @@ export default function Navbar() {
             <div className="hidden sm:block">
               <CurrencySelector />
             </div>
+            <motion.button
+              type="button"
+              onClick={toggleTheme}
+              aria-label={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
+              aria-pressed={theme === 'dark'}
+              whileTap={{ scale: 0.88 }}
+              whileHover={{ scale: 1.05 }}
+              className="relative rounded-xl p-2 min-h-[44px] min-w-[44px] grid place-items-center hover:bg-white/70 dark:hover:bg-slate-800 transition-colors"
+            >
+              <AnimatePresence mode="wait" initial={false}>
+                {theme === 'dark' ? (
+                  <motion.div
+                    key="sun"
+                    initial={{ scale: 0.5, rotate: -90, opacity: 0 }}
+                    animate={{ scale: 1, rotate: 0, opacity: 1 }}
+                    exit={{ scale: 0.5, rotate: 90, opacity: 0 }}
+                    transition={{ duration: 0.25, ease: 'easeInOut' }}
+                  >
+                    <Sun className="h-5 w-5 text-amber-300 drop-shadow-[0_0_8px_rgba(252,211,77,0.5)]" />
+                  </motion.div>
+                ) : (
+                  <motion.div
+                    key="moon"
+                    initial={{ scale: 0.5, rotate: 90, opacity: 0 }}
+                    animate={{ scale: 1, rotate: 0, opacity: 1 }}
+                    exit={{ scale: 0.5, rotate: -90, opacity: 0 }}
+                    transition={{ duration: 0.25, ease: 'easeInOut' }}
+                  >
+                    <Moon className="h-5 w-5 text-slate-600" />
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </motion.button>
 
             {user ? (
               <>
-                <MagneticButton
-                  to="/sell"
-                  strength={0.2}
-                  className="hidden rounded-full bg-slate-900 px-5 py-2 text-sm font-semibold text-white shadow-lg shadow-slate-900/15 transition-shadow hover:shadow-xl sm:inline-flex"
-                >
-                  <Plus className="h-4 w-4" />
-                  Sell
-                </MagneticButton>
+                {user.role !== 'buyer' && (
+                  <MagneticButton
+                    to="/sell"
+                    strength={0.2}
+                    className="hidden rounded-full bg-slate-900 px-5 py-2 text-sm font-semibold text-white shadow-lg shadow-slate-900/15 transition-shadow hover:shadow-xl sm:inline-flex"
+                  >
+                    <Plus className="h-4 w-4" />
+                    Sell
+                  </MagneticButton>
+                )}
 
                 <IconLink to="/favorites" label="Favorites">
                   <Heart className="h-5 w-5 text-slate-600 transition-colors group-hover:text-accent-500" />
@@ -521,7 +560,7 @@ export default function Navbar() {
                         <div className="space-y-0.5 p-1.5">
                           {[
                             { to: '/profile', icon: User, label: 'Profile' },
-                            { to: '/my-products', icon: ShoppingBag, label: 'My Listings' },
+                            ...(user.role !== 'buyer' ? [{ to: '/my-products', icon: ShoppingBag, label: 'My Listings' }] : []),
                             { to: '/favorites', icon: Heart, label: 'Favorites' },
                             { to: '/offers', icon: ArrowLeftRight, label: 'Offers' },
                             { to: '/orders', icon: Package, label: 'My Orders' },
@@ -622,7 +661,10 @@ export default function Navbar() {
                 {user ? (
                   <>
                     {[
-                      { to: '/sell', icon: Plus, label: 'Sell Item' },
+                      ...(user.role !== 'buyer' ? [
+                        { to: '/sell', icon: Plus, label: 'Sell Item' },
+                        { to: '/my-products', icon: ShoppingBag, label: 'My Listings' },
+                      ] : []),
                       { to: '/favorites', icon: Heart, label: 'Favorites' },
                       { to: '/offers', icon: ArrowLeftRight, label: 'Offers' },
                       { to: '/orders', icon: Package, label: 'My Orders' },
@@ -645,8 +687,26 @@ export default function Navbar() {
                         {item.label}
                       </Link>
                     ))}
-                    <div className="px-4 py-2 sm:hidden">
+                    <div className="px-4 py-2 sm:hidden flex items-center justify-between border-t border-slate-100 dark:border-slate-800/80 pt-3">
                       <CurrencySelector compact />
+                      <button
+                        type="button"
+                        onClick={toggleTheme}
+                        className="flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200"
+                        aria-label="Toggle theme"
+                      >
+                        {theme === 'dark' ? (
+                          <>
+                            <Sun className="h-4 w-4 text-amber-400" />
+                            <span>Light Mode</span>
+                          </>
+                        ) : (
+                          <>
+                            <Moon className="h-4 w-4 text-slate-600" />
+                            <span>Dark Mode</span>
+                          </>
+                        )}
+                      </button>
                     </div>
                   </>
                 ) : (
@@ -658,8 +718,26 @@ export default function Navbar() {
                     >
                       Log in
                     </Link>
-                    <div className="px-4 py-2 sm:hidden">
+                    <div className="px-4 py-2 sm:hidden flex items-center justify-between border-t border-slate-100 dark:border-slate-800/80 pt-3">
                       <CurrencySelector compact />
+                      <button
+                        type="button"
+                        onClick={toggleTheme}
+                        className="flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200"
+                        aria-label="Toggle theme"
+                      >
+                        {theme === 'dark' ? (
+                          <>
+                            <Sun className="h-4 w-4 text-amber-400" />
+                            <span>Light Mode</span>
+                          </>
+                        ) : (
+                          <>
+                            <Moon className="h-4 w-4 text-slate-600" />
+                            <span>Dark Mode</span>
+                          </>
+                        )}
+                      </button>
                     </div>
                   </>
                 )}

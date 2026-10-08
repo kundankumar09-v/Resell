@@ -25,7 +25,17 @@ describe('Report Routes', () => {
     productId = product._id.toString();
   });
 
-  afterAll(async () => { await server.close(); });
+  // Standard cleanup (same pattern as orders/checkout tests): without this,
+  // the shared in-memory DB keeps the 'Test' category and later test files
+  // (e.g. priceSweep) fail with a duplicate-key error on Category.name.
+  afterAll(async () => {
+    const collections = mongoose.connection.collections;
+    for (const key in collections) {
+      if (['users'].includes(key)) continue;
+      await collections[key].deleteMany({});
+    }
+    await server.close();
+  });
 
   describe('POST /api/reports', () => {
     it('requires auth', async () => {

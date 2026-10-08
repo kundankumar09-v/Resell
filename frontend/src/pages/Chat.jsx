@@ -12,6 +12,7 @@ import {
   Image as ImageIcon,
   Phone,
   PhoneIncoming,
+  PhoneOutgoing,
   PhoneMissed,
 } from 'lucide-react';
 import CallModal from '../components/CallModal';
@@ -51,7 +52,18 @@ export default function Chat() {
   const [sending, setSending] = useState(false);
   const [typing, setTyping] = useState(false);
   const [search, setSearch] = useState('');
-  const messagesEndRef = useRef(null);
+  const messagesContainerRef = useRef(null);
+  const inputRef = useRef(null);
+  const shouldAutoScrollRef = useRef(false);
+  // Follow-up style for the pending auto-scroll: fresh conversation loads
+  // jump instantly, while a just-sent message glides smoothly.
+  const smoothFollowRef = useRef(false);
+  // Guards the one-time "start at top of the document" on page entry so
+  // conversation switches never touch the window (also StrictMode-safe).
+  const enteredPageRef = useRef(false);
+  // Replicates the old autoFocus UX (focus once when the panel first opens)
+  // without ever re-focusing on later conversation switches.
+  const composerFocusedRef = useRef(false);
   const typingTimeoutRef = useRef(null);
   const callModalRef = useRef(null);
 
@@ -89,6 +101,9 @@ export default function Chat() {
       .messages(convId)
       .then((r) => {
         if (cancelled) return;
+        // One-time scroll for the freshly opened conversation; afterwards
+        // auto-scroll only follows when the reader is already near the bottom.
+        shouldAutoScrollRef.current = true;
         setMessages(r.data.messages);
         // Mark as read via REST (persists) – navbar badge cleared via clearUnread
         // Separate from message load so emit failure does not show "Failed to load messages"
@@ -218,9 +233,47 @@ export default function Chat() {
     };
   }, [activeConv, user._id, on, off]);
 
-  // Auto-scroll to latest message
+  // Once per page entry, start the Chat page at the top of the document.
+  // Conversation selection/switching below deliberately never touches the
+  // window — only the internal message list owns scrolling.
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    if (enteredPageRef.current) return;
+    enteredPageRef.current = true;
+    if (typeof window !== 'undefined' && window.scrollY > 0) {
+      window.scrollTo(0, 0);
+    }
+  }, []);
+
+  // Focus the composer (once, when the panel first opens) without moving the
+  // document. The native autoFocus attribute scrolls the focused element into
+  // view, which used to drag the whole page toward the footer on mount.
+  useEffect(() => {
+    if (!activeConv) {
+      composerFocusedRef.current = false;
+      return;
+    }
+    if (composerFocusedRef.current) return;
+    composerFocusedRef.current = true;
+    inputRef.current?.focus({ preventScroll: true });
+  }, [activeConv]);
+
+  // Never pull a reader away from older messages. Sending explicitly opts in;
+  // incoming messages follow only when the reader was already near the end.
+  // IMPORTANT: scroll ONLY the internal message-list container by assigning
+  // scrollTop/scrollTo on it directly. scrollIntoView() must never be used
+  // here — it scrolls every scrollable ancestor and drags the whole document
+  // down toward the footer whenever a conversation is opened.
+  useEffect(() => {
+    if (!shouldAutoScrollRef.current) return;
+    shouldAutoScrollRef.current = false;
+    const node = messagesContainerRef.current;
+    if (!node) return;
+    if (smoothFollowRef.current) {
+      smoothFollowRef.current = false;
+      node.scrollTo({ top: node.scrollHeight, behavior: 'smooth' });
+    } else {
+      node.scrollTop = node.scrollHeight;
+    }
   }, [messages]);
 
   const handleSend = async (e) => {
@@ -228,6 +281,8 @@ export default function Chat() {
     if (!input.trim() || !activeConv) return;
     if (sending) return;
     const text = input.trim();
+    shouldAutoScrollRef.current = true;
+    smoothFollowRef.current = true;
     const convId = activeConv._id;
     setInput('');
     setSending(true);
@@ -342,7 +397,7 @@ export default function Chat() {
               {/* Conversations list */}
               <div
                 className={cn(
-                  'w-full md:w-80 border-r border-slate-200 flex flex-col',
+                  'chat-sidebar w-full md:w-80 border-r border-slate-200 flex flex-col min-h-0',
                   activeConv && 'hidden md:flex'
                 )}
               >
@@ -374,7 +429,7 @@ export default function Chat() {
                   </div>
                 </div>
 
-                <div className="flex-1 overflow-y-auto">
+                <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain">
                   {filteredConversations.length === 0 ? (
                     <p className="p-8 text-center text-sm text-slate-500">
                       No conversations yet
@@ -394,7 +449,7 @@ export default function Chat() {
                           animate={{ opacity: 1, x: 0 }}
                           className={cn(
                             'w-full p-4 flex items-start gap-3 hover:bg-slate-50 transition border-b border-slate-100 text-left',
-                            activeConv?._id === conv._id && 'bg-brand-50'
+                            activeConv?._id === conv._id && 'bg-brand-50 chat-conv-active'
                           )}
                           whileTap={{ scale: 0.99 }}
                         >
@@ -454,7 +509,7 @@ export default function Chat() {
               {/* Messages panel */}
               <div
                 className={cn(
-                  'flex-1 flex flex-col',
+                  'flex-1 flex flex-col min-w-0 min-h-0',
                   !activeConv && 'hidden md:flex'
                 )}
               >
@@ -524,7 +579,7 @@ export default function Chat() {
                                   callModalRef.current.startCall(target._id, target.name, activeConv._id);
                                 }
                               }}
-                              className="p-2 rounded-full bg-brand-50 text-brand-600 hover:bg-brand-100 transition ml-1"
+                              className="chat-call-btn p-2 rounded-full bg-brand-50 text-brand-600 hover:bg-brand-100 transition ml-1"
                               whileTap={{ scale: 0.9 }}
                               title="Voice call"
                             >
@@ -536,7 +591,10 @@ export default function Chat() {
                     </motion.div>
 
                     {/* Messages */}
-                    <div className="flex-1 overflow-y-auto p-4 space-y-3">
+                    <div ref={messagesContainerRef} onScroll={(event) => {
+                      const node = event.currentTarget;
+                      shouldAutoScrollRef.current = node.scrollHeight - node.scrollTop - node.clientHeight < 96;
+                    }} className="chat-messages flex-1 min-h-0 overflow-y-auto overscroll-contain p-4 space-y-3">
                       {messages.length === 0 ? (
                         <motion.div
                           initial={{ opacity: 0, y: 20 }}
@@ -563,14 +621,18 @@ export default function Chat() {
                                   'max-w-[70%] rounded-2xl px-4 py-2.5',
                                   isMe
                                     ? 'bg-gradient-to-r from-brand-500 to-brand-600 text-white'
-                                    : 'bg-slate-100 text-slate-900'
+                                    : 'bg-slate-100 text-slate-900 chat-bubble-in'
                                 )}
                               >
                                 {msg.type === 'call' && (
                                   <div className="flex items-center gap-2 text-sm font-medium">
-                                    {['missed', 'rejected', 'cancelled'].includes(msg.call?.outcome)
-                                      ? <PhoneMissed className="w-4 h-4 text-red-500" />
-                                      : <PhoneIncoming className="w-4 h-4 text-brand-600" />}
+                                    {['missed', 'rejected', 'cancelled'].includes(msg.call?.outcome) ? (
+                                      <PhoneMissed className="w-4 h-4 text-red-500" />
+                                    ) : outgoing ? (
+                                      <PhoneOutgoing className="w-4 h-4 text-brand-600" />
+                                    ) : (
+                                      <PhoneIncoming className="w-4 h-4 text-brand-600" />
+                                    )}
                                     {callSummary(msg)}
                                   </div>
                                 )}
@@ -636,7 +698,6 @@ export default function Chat() {
                           </motion.div>
                         )}
                       </AnimatePresence>
-                      <div ref={messagesEndRef} />
                     </div>
 
                     {/* Input */}
@@ -647,12 +708,12 @@ export default function Chat() {
                       className="p-4 border-t border-slate-200 flex gap-2"
                     >
                       <input
+                        ref={inputRef}
                         type="text"
                         value={input}
                         onChange={handleInputChange}
                         placeholder="Type a message..."
                         className="input flex-1"
-                        autoFocus
                       />
                       <MagneticButton
                         type="submit"

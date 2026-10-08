@@ -323,7 +323,11 @@ describe('Cloudinary orphan cleanup + legacy listings (T8)', () => {
           description: 'Created through the canonical Product API',
           price: 42,
           category: category._id.toString(),
-          images: [{ url: 'https://example.com/img.jpg', publicId: 'canonical-1' }],
+          images: [
+          { url: 'https://example.com/img.jpg', publicId: 'canonical-1' },
+          { url: 'https://example.com/img2.jpg', publicId: 'canonical-2' },
+          { url: 'https://example.com/img3.jpg', publicId: 'canonical-3' },
+        ],
         })
         .expect(201);
       expect(created.body.product.title).toBe('Canonical Product');

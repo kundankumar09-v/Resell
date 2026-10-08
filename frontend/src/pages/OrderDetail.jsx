@@ -18,6 +18,7 @@ import useFormatPrice from '../hooks/useFormatPrice';
 import { useAuth } from '../contexts/AuthContext';
 import PageTransition from '../components/layout/PageTransition';
 import Loader from '../components/ui/Loader';
+import { PRODUCT_FALLBACK_IMAGE, handleImageError } from '../utils/imageFallback';
 
 const STATUS_CONFIG = {
   pending_payment: { label: 'Awaiting Payment', icon: Clock, color: 'text-amber-500' },
@@ -116,13 +117,12 @@ export default function OrderDetail() {
 
         <div className="card p-5 mb-4">
           <div className="flex items-start gap-4">
-            {order.product?.images?.[0] && (
-              <img
-                src={order.product.images[0].url}
-                alt=""
-                className="w-24 h-24 rounded-xl object-cover border border-slate-100"
-              />
-            )}
+            <img
+              src={order.product?.images?.[0]?.url || PRODUCT_FALLBACK_IMAGE}
+              alt=""
+              className="w-24 h-24 rounded-xl object-cover border border-slate-100 bg-slate-50 flex-shrink-0"
+              onError={(e) => handleImageError(e, PRODUCT_FALLBACK_IMAGE)}
+            />
             <div className="flex-1 min-w-0">
               {order.product?._id ? (
                 <Link to={`/product/${order.product._id}`} className="font-semibold hover:text-brand-600 line-clamp-2">

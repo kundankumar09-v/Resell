@@ -17,6 +17,7 @@
  */
 
 const mongoose = require('mongoose');
+const crypto = require('crypto');
 const ProductIdentity = require('../models/ProductIdentity');
 const Product = require('../models/Product');
 const Sale = require('../models/Sale');
@@ -46,6 +47,14 @@ const MAX_POSSESSION_ATTEMPTS = 5;
 
 // Sale statuses that count as a verified ownership transfer
 const VERIFIED_SALE_STATUSES = ['paid', 'shipped', 'delivered', 'completed'];
+
+/**
+ * Deterministic hash for a 'visual' (possession-based) identity. Derived
+ * from the listing id only — no sensitive identifier is involved, so one
+ * visual identity per listing is guaranteed by the existing unique index.
+ */
+const hashVisualIdentifier = (productId) =>
+  crypto.createHash('sha256').update(`visual:${productId}`).digest('hex');
 
 /**
  * Check whether any other ACTIVE listing shares this identity.
@@ -106,6 +115,17 @@ const verifyOwnershipForListing = async ({
   productId,
   proofImageUrl,
 }) => {
+  if (
+    typeof rawIdentifier !== 'string' ||
+    !rawIdentifier.trim() ||
+    typeof identifierType !== 'string' ||
+    !identifierType.trim()
+  ) {
+    return { outcome: 'untracked', identity: null, signals: [], warnings: [] };
+  }
+
+  rawIdentifier = rawIdentifier.trim();
+  identifierType = identifierType.trim().toLowerCase();
   const identifierHash = hashIdentifier(rawIdentifier, identifierType);
   const sellerKey = sellerId.toString();
   const signals = [];
@@ -155,23 +175,30 @@ const verifyOwnershipForListing = async ({
     return { outcome: 'flagged', identity, signals, warnings };
   }
 
-  // D. Same identifier on multiple ACTIVE listings (checked for any owner)
+  const isSameOwner = identity.currentOwnerId.toString() === sellerKey;
+  const sameOwnerSoldRelist = isSameOwner && identity.status === 'sold';
+
+  // D. Same identifier on multiple ACTIVE listings (checked for any owner).
+  // A same-owner sold-to-relist is legitimate and must stay low-risk. A same-
+  // owner duplicate that is still active is still suspicious and should warn.
   const otherActive = await countOtherActiveListings(identity._id, productId);
-  if (otherActive > 0) {
+  if (isSameOwner && otherActive > 0 && identity.status === 'active') {
     signals.push(SIGNALS.PRODUCT_IDENTIFIER_REUSED, SIGNALS.MULTIPLE_ACTIVE_LISTINGS);
     warnings.push(
       'This serial/IMEI is already listed in another active listing. The physical product cannot be for sale twice.'
     );
-  } else if (
-    identity.productId &&
-    identity.productId.toString() !== (productId || '').toString()
-  ) {
+  } else if (otherActive > 0 && !sameOwnerSoldRelist) {
+    signals.push(SIGNALS.PRODUCT_IDENTIFIER_REUSED, SIGNALS.MULTIPLE_ACTIVE_LISTINGS);
+    warnings.push(
+      'This serial/IMEI is already listed in another active listing. The physical product cannot be for sale twice.'
+    );
+  } else if (!isSameOwner && identity.productId && identity.productId.toString() !== (productId || '').toString()) {
     // Identifier reused on other (inactive) listings — informational signal
     signals.push(SIGNALS.PRODUCT_IDENTIFIER_REUSED);
   }
 
   // B. Existing identifier + same owner -> legitimate relisting
-  if (identity.currentOwnerId.toString() === sellerKey) {
+  if (isSameOwner) {
     // A sold product being relisted by its owner is active again
     if (identity.status === 'sold') {
       identity.status = 'active';
@@ -321,6 +348,93 @@ const verifyPossession = async ({ productId, sellerId, code, proofImageUrl }) =>
 };
 
 /**
+ * Request a possession-verification challenge (SCRUM-25). Seller-only:
+ * the seller must already be authenticated and may only challenge their
+ * own product (owner check below).
+ *
+ * Generalizes the existing possession mechanism — same short-lived codes,
+ * TTL, owner-only verification, attempt limits, constant-time comparison
+ * and provenance events (no second verification system).
+ *
+ * Flow:
+ *   request -> short-lived code issued -> seller photographs the physical
+ *   product beside the code -> submits code + proof -> POSSESSION_VERIFIED
+ *
+ * For products WITHOUT a standardized identifier a 'visual' identity is
+ * registered lazily: the identifier hash is derived from the listing id
+ * itself, so no sensitive identifier is ever provided or stored. Missing
+ * possession verification is never fraud on its own.
+ *
+ * @param {Object} params
+ * @param {string} params.productId Listing to challenge
+ * @param {string} params.sellerId  Authenticated seller requesting the code
+ * @returns {Object} { created, alreadyVerified, identity }
+ */
+const requestPossessionChallenge = async ({ productId, sellerId }) => {
+  let identity = await ProductIdentity.findOne({ productId });
+
+  // Only the listing's owner may challenge possession. This guards both
+  // the lazy visual-identity registration below and re-requests for an
+  // existing identity — another seller can never claim or challenge a
+  // listing they do not own.
+  const Product = require('../models/Product');
+  const listing = await Product.findById(productId).select('seller');
+  if (!listing) {
+    throw new AppError('Product not found', 404, 'NOT_FOUND');
+  }
+  if (listing.seller.toString() !== sellerId.toString()) {
+    throw new AppError('Only the listing owner can request a possession challenge', 403, 'FORBIDDEN');
+  }
+
+  if (!identity) {
+    const { code, codeExpiresAt } = issueVerificationCode();
+    identity = await ProductIdentity.create({
+      productId,
+      identifierType: 'visual',
+      identifierHash: hashVisualIdentifier(productId),
+      currentOwnerId: sellerId,
+      status: 'active',
+      verification: {
+        proofPhotoUrl: '',
+        verificationCode: code,
+        codeExpiresAt,
+        method: 'none',
+        possessionStatus: POSSESSION_STATUSES.UNVERIFIED,
+        verifiedAt: null,
+        attempts: 0,
+      },
+    });
+    await createProvenanceEvent({
+      productIdentityId: identity._id,
+      eventType: 'registered',
+      ownerId: sellerId,
+      listingId: productId,
+    });
+    return { created: true, alreadyVerified: false, identity };
+  }
+
+  if (identity.currentOwnerId.toString() !== sellerId.toString()) {
+    throw new AppError('Only the current owner can request a possession challenge', 403, 'FORBIDDEN');
+  }
+
+  // Already verified — nothing to challenge, no new code is issued
+  if (identity.verification?.possessionStatus === POSSESSION_STATUSES.VERIFIED) {
+    return { created: false, alreadyVerified: true, identity };
+  }
+
+  // Issue a fresh short-lived code. Prior attempt counts are preserved so
+  // re-requesting a code cannot be used to bypass the wrong-code lockout.
+  const fresh = issueVerificationCode();
+  identity.verification = {
+    ...identity.verification,
+    verificationCode: fresh.code,
+    codeExpiresAt: fresh.codeExpiresAt,
+  };
+  await identity.save();
+  return { created: false, alreadyVerified: false, identity };
+};
+
+/**
  * Set an identity's registry status (reported_stolen / flagged / active).
  * Intended for authorized admin/moderator use only — controllers must
  * enforce authorization. Creates a 'reported' provenance event and
@@ -362,6 +476,8 @@ const setIdentityStatus = async ({ identityId, status, moderatorId, reportId }) 
  * with an identity. Best-effort: never throws to callers.
  *
  * eventType: 'sold' (payment confirmed) | 'ownership_transferred' (buyer owns it)
+ *            | 'sale_cancelled' (order cancelled/refunded — ownership
+ *            reverts to the seller and the identity becomes active again)
  */
 const recordSaleProvenance = async ({
   productId,
@@ -378,7 +494,7 @@ const recordSaleProvenance = async ({
     await createProvenanceEvent({
       productIdentityId: identity._id,
       eventType,
-      ownerId: buyerId || sellerId,
+      ownerId: sellerId || buyerId || identity.currentOwnerId,
       listingId: productId,
       transactionId: transactionId || null,
     });
@@ -390,6 +506,12 @@ const recordSaleProvenance = async ({
       identity.status = 'active';
       identity.currentOwnerId = buyerId;
     }
+    if (eventType === 'sale_cancelled') {
+      // Cancelled/refunded sale: the product is back with the seller —
+      // ownership reverts and the identity is active again.
+      identity.status = 'active';
+      if (sellerId) identity.currentOwnerId = sellerId;
+    }
     await identity.save();
   } catch (err) {
     console.error('[IdentityVerification] recordSaleProvenance error:', err.message);
@@ -400,8 +522,10 @@ module.exports = {
   SIGNALS,
   POSSESSION_STATUSES,
   MAX_POSSESSION_ATTEMPTS,
+  hashVisualIdentifier,
   verifyOwnershipForListing,
   verifyPossession,
+  requestPossessionChallenge,
   setIdentityStatus,
   recordSaleProvenance,
   hasVerifiedTransfer,

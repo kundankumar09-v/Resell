@@ -49,7 +49,7 @@ app.use(
         defaultSrc: ["'self'"],
         scriptSrc: ["'self'"],
         styleSrc: ["'self'", "'unsafe-inline'"],
-        imgSrc: ["'self'", 'data:', 'https://res.cloudinary.com'],
+        imgSrc: ["'self'", 'data:', 'blob:', 'https://res.cloudinary.com', 'https://images.unsplash.com', 'https://*.unsplash.com'],
         fontSrc: ["'self'"],
         connectSrc: ["'self'", process.env.CLIENT_URL || ''].filter(Boolean),
         frameSrc: ["'none'"],
@@ -104,7 +104,7 @@ const authLimiter = rateLimit({
   message: { success: false, code: 'RATE_LIMIT', message: 'Too many login attempts' },
 });
 
-app.get('/health', (req, res) => {
+app.get(['/health', '/api/health'], (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
@@ -169,7 +169,26 @@ if (require.main === module) {
   const start = async () => {
     try {
       await connectDB();
-      server.listen(PORT, () => {
+      // Retry EADDRINUSE briefly instead of crashing: during a nodemon
+      // restart the previous instance may still hold port 5000 while its
+      // graceful shutdown finishes, which would crash the new instance and
+      // leave nodemon in "app crashed — waiting for file changes" state.
+      let attempts = 0;
+      const listen = () => {
+        server.once('error', (err) => {
+          if (err.code === 'EADDRINUSE' && attempts < 5) {
+            attempts += 1;
+            console.warn(`[Server] Port ${PORT} busy, retrying in 2s (attempt ${attempts}/5)...`);
+            setTimeout(listen, 2000);
+          } else if (err.code === 'EADDRINUSE') {
+            console.error(`[Server] Port ${PORT} is already in use. Stop the existing ReSell backend or set PORT to another free port.`);
+            process.exit(1);
+          } else {
+            console.error('[Server] Startup failed:', err);
+            process.exit(1);
+          }
+        });
+        server.listen(PORT, () => {
         console.log(`[Server] Running on port ${PORT} [${process.env.NODE_ENV || 'development'}]`);
         registerSweepJob();
         // Warm MobileNet in background to avoid 18s cold start on first upload
@@ -177,7 +196,9 @@ if (require.main === module) {
           const { loadModel } = require('./services/imageClassifier');
           loadModel().then(() => console.log('[Server] MobileNet warmed')).catch(() => {});
         }
-      });
+        });
+      };
+      listen();
     } catch (err) {
       console.error('[Server] Startup failed:', err);
       process.exit(1);

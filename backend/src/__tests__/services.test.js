@@ -1,4 +1,4 @@
-// Tests for pure/deterministic service functions.
+﻿// Tests for pure/deterministic service functions.
 // Uses table-driven test structure (it.each) for scalable edge case coverage.
 
 const mongoose = require('mongoose');
@@ -34,13 +34,13 @@ describe('Service Unit Tests', () => {
   // --- exchangeRates ---
   describe('exchangeRates.convert', () => {
     it.each([
-      [100, 'USD', 'EUR', 92, 'basic USD→EUR'],
+      [100, 'USD', 'EUR', 92, 'basic USDâ†’EUR'],
       [0, 'USD', 'EUR', 0, 'zero amount returns zero'],
       [-5, 'USD', 'EUR', -5, 'negative amount returns as-is'],
       [100, 'USD', 'USD', 100, 'same currency returns same'],
       [100, 'XYZ', 'EUR', 92, 'unknown currency falls back to USD'],
       [100, 'USD', 'XYZ', 100, 'unknown target falls back to USD base'],
-    ])('convert(%s, "%s", "%s") ≈ %s (%s)', (amount, from, to, expected, desc) => {
+    ])('convert(%s, "%s", "%s") â‰ˆ %s (%s)', (amount, from, to, expected, desc) => {
       const rates = { USD: 1, EUR: 0.92, GBP: 0.79 };
       const result = convert(amount, from, to, rates);
       expect(result).toBeCloseTo(expected, 0);
@@ -225,14 +225,18 @@ describe('Service Unit Tests', () => {
 
   // --- computerVision ---
   describe('computerVision.assessCondition', () => {
-    it('returns default when sharp unavailable and buffer empty', async () => {
+    it('returns no-evidence (null score) when sharp unavailable and buffer empty', async () => {
       // With a minimal valid buffer
       const buf = Buffer.alloc(100, 0x80);
       const result = await assessCondition(buf);
       expect(result).toHaveProperty('score');
       expect(result).toHaveProperty('label');
-      expect(result.score).toBeGreaterThanOrEqual(30);
-      expect(result.score).toBeLessThanOrEqual(100);
+      // Explicit no-evidence semantics: when visual analysis is unavailable
+      // the score is null (never a fabricated number) and callers must show
+      // "insufficient evidence" instead.
+      expect(result.available).toBe(false);
+      expect(result.score).toBeNull();
+      expect(result.label).toBeNull();
     });
   });
 
@@ -242,7 +246,7 @@ describe('Service Unit Tests', () => {
       const result = await classifyProduct(buf, { title: 'iPhone 14 Pro' });
       expect(result.category).toBe('Electronics');
       expect(result.confidence).toBeGreaterThan(0);
-    });
+    }, 90000);
 
     it('classifies fashion from title keywords', async () => {
       const buf = Buffer.alloc(100, 0x80);

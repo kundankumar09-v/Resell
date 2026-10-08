@@ -1,999 +1,1258 @@
-# ReSell
+# ReSell — AI-Powered Peer-to-Peer Marketplace
 
-> **Smart Pricing, Fraud Detection, and Sustainable Resale**
-
-ReSell is an **AI-powered peer-to-peer marketplace** for buying and selling pre-owned products. It combines a modern React storefront with a Node.js/Express backend, real-time chat, and on-device/heuristics-based AI services to help sellers price fairly, buyers trust listings, and the platform catch duplicates and fraud — extending product lifecycles and promoting sustainable resale.
-
-[![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=white)](https://react.dev/)
-[![Node.js](https://img.shields.io/badge/Node.js-%3E%3D18-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
-[![Express](https://img.shields.io/badge/Express-4-000000?logo=express&logoColor=white)](https://expressjs.com/)
-[![MongoDB](https://img.shields.io/badge/MongoDB-Mongoose-47A248?logo=mongodb&logoColor=white)](https://www.mongodb.com/)
-[![Socket.io](https://img.shields.io/badge/Socket.io-4-010101?logo=socket.io&logoColor=white)](https://socket.io/)
-[![Cloudinary](https://img.shields.io/badge/Cloudinary-Image%20Storage-3448C5?logo=cloudinary&logoColor=white)](https://cloudinary.com/)
-[![TensorFlow.js](https://img.shields.io/badge/TensorFlow.js-4-FF6F00?logo=tensorflow&logoColor=white)](https://www.tensorflow.org/js)
-[![License](https://img.shields.io/badge/License-Unlicensed-lightgrey)](#license)
+> A full-stack, production-ready secondhand marketplace with a multi-layer ML fraud detection pipeline, CLIP-powered semantic search, AI price recommendations, product identity verification, and real-time messaging.
 
 ---
 
 ## Table of Contents
 
-- [Project Overview](#project-overview)
-- [Features](#features)
-- [Tech Stack](#tech-stack)
-- [Architecture](#architecture)
-- [Project Structure](#project-structure)
-- [Installation & Setup](#installation--setup)
-- [Environment Variables](#environment-variables)
-- [Running the Application](#running-the-application)
-- [Usage](#usage)
-- [API Documentation](#api-documentation)
-- [ML Models & Implementation](#ml-models--implementation)
-- [Security](#security)
-- [Database](#database)
-- [Future Enhancements](#future-enhancements)
-- [Contributing](#contributing)
-- [License](#license)
-- [Contact & Support](#contact--support)
+1. [Project Overview](#1-project-overview)
+2. [Architecture](#2-architecture)
+3. [Tech Stack](#3-tech-stack)
+4. [Repository Structure](#4-repository-structure)
+5. [Frontend](#5-frontend)
+6. [Backend API](#6-backend-api)
+7. [ML / AI System — Deep Dive](#7-ml--ai-system--deep-dive)
+   - [7.1 Image Fraud Detection Pipeline](#71-image-fraud-detection-pipeline)
+   - [7.2 Perceptual Hashing (pHash)](#72-perceptual-hashing-phash)
+   - [7.3 MobileNet Image Classification](#73-mobilenet-image-classification)
+   - [7.4 CNN Product Fingerprinting](#74-cnn-product-fingerprinting)
+   - [7.5 Computer Vision — Damage & Condition Scoring](#75-computer-vision--damage--condition-scoring)
+   - [7.6 Identity Verification & Provenance](#76-identity-verification--provenance)
+   - [7.7 Seller Trust Score](#77-seller-trust-score)
+   - [7.8 Price Recommendation Engine](#78-price-recommendation-engine)
+   - [7.9 Risk Scoring — Unified Fraud Engine](#79-risk-scoring--unified-fraud-engine)
+8. [ML Microservice (Python / FastAPI)](#8-ml-microservice-python--fastapi)
+   - [8.1 CLIP Embeddings](#81-clip-embeddings)
+   - [8.2 LightGBM Fraud Pipeline v2](#82-lightgbm-fraud-pipeline-v2)
+   - [8.3 Quantile Price Estimation (kNN)](#83-quantile-price-estimation-knn)
+   - [8.4 Shadow Mode & A/B Testing](#84-shadow-mode--ab-testing)
+   - [8.5 ANN Index (HNSW)](#85-ann-index-hnsw)
+9. [Real-Time Features](#9-real-time-features)
+10. [Background Job Workers](#10-background-job-workers)
+11. [Database Models](#11-database-models)
+12. [Security](#12-security)
+13. [Environment Variables](#13-environment-variables)
+14. [Local Development Setup](#14-local-development-setup)
+15. [Docker / Production Deployment](#15-docker--production-deployment)
+16. [API Reference](#16-api-reference)
+17. [Testing](#17-testing)
 
 ---
 
-## Project Overview
+## 1. Project Overview
 
-ReSell enables anyone to list second-hand products with images, descriptions, categories, pricing, and location, then discover and purchase through search, filtering, favorites, offers, and checkout. Sellers manage listings and orders; buyers browse the marketplace, chat with sellers, and pay via Stripe. An admin surface moderates users, products, and reports.
+**ReSell** is a peer-to-peer secondhand marketplace designed to solve the core trust problem of buying and selling used goods online. Unlike generic marketplaces, ReSell embeds fraud detection, condition verification, and price transparency directly into the listing creation flow — all powered by machine learning models that run on every image uploaded to the platform.
 
-The platform's differentiator is **embedded AI/ML** (price recommendation, image classification, perceptual-hash duplicate detection, fraud/risk scoring, seller trust scoring, and computer-vision condition/damage analysis) and **real-time** messaging via Socket.io — all integrated directly into the listing and buying flow without requiring a separate Python ML service by default (optional `ML_SERVICE_URL` can delegate to an external service).
+### Key Differentiators
 
----
-
-## Features
-
-### Core Marketplace
-
-- **Authentication** — Register, login, logout, refresh, profile update, password change, JWT with httpOnly cookies (`access_token` + `refresh_token`) and token blacklisting. Roles: `buyer`, `seller`, `admin` (`backend/src/middleware/auth.js:6`, `backend/src/utils/jwt.js:26`).
-- **Product listings** — Create/update/delete, mark as sold, upload up to 8 images (10 MB each, `memoryStorage` + `sharp` + Cloudinary transformation `1200×1200`, `backend/src/middleware/upload.js:1`, `backend/src/config/cloudinary.js:42`), title/description/brand/model/specifications/condition (`new`/`like-new`/`good`/`fair`/`poor`)/years used/currency/location.
-- **Search & discovery** — Full-text index on `title`/`description`/`brand`/`model` (`backend/src/models/Product.js:114`), filtering by category, price range, city, condition, brand, status; sorting and pagination (`GET /api/products`, `backend/src/routes/productRoutes.js:25`).
-- **Categories** — CRUD (admin), slug-based lookup, stats (`backend/src/routes/categoryRoutes.js:17`).
-- **Favorites / wishlist** — Add/remove/list/check (`backend/src/routes/favoriteRoutes.js:12`).
-- **Offers** — Create/list/mine/received/accept/reject/counter (`backend/src/routes/offerRoutes.js:18`).
-- **Orders & checkout** — Stripe Checkout Sessions + webhook (`POST /api/checkout/session`, `POST /api/checkout/webhook` with `express.raw`, `backend/src/server.js:68`), order lifecycle: mine/selling/ship/deliver/cancel (`backend/src/routes/orderRoutes.js:15`).
-- **User profiles & reviews** — Seller profile, trust score, reviews (`backend/src/routes/sellerRoutes.js:12`).
-- **Reports** — Listing/user reports for moderation (`backend/src/routes/reportRoutes.js:14`).
-- **Notifications** — List/unread/mark-read/mark-all-read (`backend/src/routes/notificationRoutes.js:8`).
-- **Multi-currency** — Live exchange rates with scheduled refresh (`GET /api/exchange-rates/rates`, `POST /api/exchange-rates/convert`, `backend/src/services/exchangeRates.js`, auto-started in `backend/src/server.js:154`).
-- **Similar products** — Related listing suggestions (`GET /api/products/:id/similar`, `backend/src/services/similarProducts.js`).
-- **Admin** — Dashboard stats/analytics, user management, product moderation (`backend/src/routes/adminRoutes.js:20`).
-
-### Real-Time
-
-Implemented in `backend/src/sockets/index.js:7` and `frontend/src/contexts/SocketContext.jsx`:
-
-- **Socket.io authentication** — via `auth.token`, query `token`, or `access_token` httpOnly cookie; `verifyToken` + `User` lookup.
-- **Presence** — `user:status` broadcast on connect/disconnect, `lastSeen` persisted.
-- **Conversations** — Auto-join `user:{id}` and `conversation:{id}` rooms; `conversation:join` / `conversation:leave` events.
-- **Messaging** — `chat:send` (conversation + text/attachments) with participant check, persisted to `Message`, room broadcast; REST fallback at `POST /api/chat/messages` (`backend/src/routes/chatRoutes.js:23`).
-- **Read receipts & typing** — `conversation:read`, `typing:start`/`typing:stop` patterns (see `backend/src/sockets/index.js:80`).
-- **Notifications over socket** — order/offer events pushed to `user:{id}` rooms.
-
-### AI / ML
-
-Services live in `backend/src/services/` and are invoked during product creation/update and via dedicated endpoints:
-
-| Feature | What it does | How it works | Where | Benefit |
-|---|---|---|---|---|
-| **Price recommendation** | Suggests fair resale price, range, confidence, and explanatory factors | **Heuristic multi-factor engine** — condition factor (`new` 0.95 → `poor` 0.25), category annual depreciation (e.g. Fashion 30%, Electronics 18%), brand premium (e.g. Apple 1.1×), years-used decay, comparable listings, original price, CV condition/damage scores (`backend/src/services/priceRecommendation.js:26`) | `priceRecommendation.js`, `priceSweep.js`, `workers/priceAnalyzer.js`, `GET /api/products/suggest-price` | Prevents over/under-pricing, builds buyer trust |
-| **Image classification** | Maps product photos to ReSell category taxonomy | **MobileNet (TensorFlow.js)** via `@tensorflow/tfjs` + `@tensorflow-models/mobilenet` with `sharp` tensor decoding; keyword fallback when confidence is low (`backend/src/services/imageClassifier.js:1`) | `imageClassifier.js`, `cvAdapter.js`, stored in `Product.aiAnalysis.classification` | Auto-categorizes listings, catches miscategorized items |
-| **Duplicate detection** | Flags re-used or near-identical images | **64-bit perceptual hash (pHash)** via 32×32 grayscale → 2D DCT → 8×8 low-frequency median threshold (`backend/src/services/imageHash.js:1`); Hamming distance ≤ 12 = duplicate (validated margin: zero false positives at ≥30) | `imageHash.js`, checked in `fraudDetection.js:24`, persisted as `aiAnalysis.imageHashes` | Prevents spam/reposts and stolen-image listings |
-| **Fraud / risk detection** | Scores each listing 0–100 (`low`/`medium`/`high`) | Combines duplicate-image hits (+35), suspicious pricing vs comparables, repeated descriptions, complaint history, new-account + high-value listing, seller trust signals (`backend/src/services/fraudDetection.js:26`) | `fraudDetection.js`, persisted as `aiAnalysis.riskAssessment` | Surfaces risky listings for moderation before buyers are harmed |
-| **Seller trust score** | 0–100 seller reputation | Weighted: account age (0–15), sales/activity (0–20), avg rating (0–25), response time (0–15), complaint-free ratio (0–15), listing quality (0–10) (`backend/src/services/trustScore.js:1`) | `trustScore.js`, `GET /api/sellers/:id/trust` | Helps buyers choose reliable sellers |
-| **Computer vision (quality/damage)** | Condition & damage assessment from images | `sharp` pixel analysis: brightness/contrast/sharpness, heuristic scratch/damage detection; pluggable `ML_SERVICE_URL` for external model (`backend/src/services/computerVision.js:1`) | `computerVision.js`, feeds `aiAnalysis.conditionScore`/`damageScore` | Objective condition evidence, refines pricing |
-
-Background enrichment runs via **BullMQ + Redis** (`backend/src/queues/index.js`) and workers (`backend/src/workers/imageProcessor.js`, `backend/src/workers/priceAnalyzer.js`).
+| Feature | Description |
+|---|---|
+| **Image Fraud Detection** | Multi-layer pipeline: perceptual hashing to CNN fingerprinting to CLIP vector similarity to LightGBM classifier |
+| **Product Identity** | Serial / IMEI / VIN registry with cryptographic possession verification and provenance chain |
+| **AI Price Recommendation** | Depreciation model + market comparables + visual condition adjustment |
+| **MobileNet Auto-Category** | Automatic product category suggestion from uploaded images |
+| **Seller Trust Score** | Transparent 0-100 score with per-component breakdown |
+| **Real-Time Chat & Offers** | Socket.IO-powered negotiation with offer countering |
+| **Stripe Checkout** | Secure end-to-end payment with webhook verification |
+| **Multi-Currency** | Live exchange rates with a daily scheduler |
 
 ---
 
-## Tech Stack
+## 2. Architecture
 
-| Layer | Technology | Purpose |
+```
++---------------------------------------------------------------------+
+|                         CLIENT (Browser)                            |
+|              React 18 + Vite + TailwindCSS + Socket.IO              |
++------------------------+--------------------------------------------+
+                         | HTTPS / WSS
++------------------------v--------------------------------------------+
+|                   BACKEND API  (Node.js / Express)                  |
+|  REST API - Socket.IO - BullMQ Job Queues - Rate Limiting - Helmet  |
+|  +------------+  +-------------+  +--------------+  +-----------+  |
+|  |  Auth /JWT |  |  Products   |  | Orders/Stripe|  |  Chat/IO  |  |
+|  +------------+  +------+------+  +--------------+  +-----------+  |
+|                         | enqueue                                   |
+|  +----------------------v------------------------------------------+ |
+|  |             BULLMQ WORKERS (Redis-backed)                        | |
+|  |  imageProcessor.js  -  priceAnalyzer.js                         | |
+|  +----------------------+------------------------------------------+ |
++-------------------------|--------------------------------------------|
+                          | HTTP (internal)
++-------------------------v-------------------------------------------+
+|               ML MICROSERVICE  (Python / FastAPI)                   |
+|  CLIP ViT-B/32 Embeddings - LightGBM Fraud v2 - kNN Price - HNSW   |
++---------------------------------------------------------------------+
+          |                        |                       |
++---------v------+      +----------v------+    +----------v----------+
+|   MongoDB 6.0  |      |   Redis 7       |    |  Cloudinary CDN     |
+|  (Primary DB)  |      |  (Cache/Queue)  |    |  (Image Storage)    |
++----------------+      +-----------------+    +---------------------+
+```
+
+### Data Flow — Listing Creation
+
+```
+User uploads images
+        |
+        v
+  Backend receives -> validates -> saves to Cloudinary
+        |
+        v
+  BullMQ: enqueue "image-processing" job
+        |
+        v
+  imageProcessor Worker:
+    +- 1. pHash (64-bit DCT perceptual hash + mirror hash)
+    +- 2. MobileNet category classification
+    +- 3. Condition scoring (brightness / contrast / edge density)
+    +- 4. Damage scoring (heuristic pixel analysis)
+    +- 5. CNN feature extraction -> cnnFeatures stored per image
+    +- 6. ML Service: CLIP embedding -> vector stored
+    +- 7. Identity verification (serial/IMEI/VIN registry check)
+    +- 8. Product fingerprint visual similarity check
+    +- 9. Fraud risk score computed & product document updated
+```
+
+---
+
+## 3. Tech Stack
+
+### Frontend
+| Layer | Technology |
+|---|---|
+| Framework | React 18 + Vite |
+| Styling | TailwindCSS + custom SCSS |
+| Routing | React Router v6 |
+| State | React Context API (Auth, Socket, Currency, Theme) |
+| Real-time | Socket.IO Client |
+| HTTP | Axios |
+| Notifications | react-hot-toast |
+| Payments | Stripe.js / @stripe/react-stripe-js |
+
+### Backend
+| Layer | Technology |
+|---|---|
+| Runtime | Node.js 20 |
+| Framework | Express.js |
+| Database | MongoDB 6 via Mongoose |
+| Auth | JWT (access + refresh tokens, httpOnly cookies) |
+| Real-time | Socket.IO |
+| Job Queue | BullMQ + Redis |
+| Image Processing | Sharp (native) |
+| ML (Node) | TensorFlow.js + @tensorflow-models/mobilenet |
+| Payments | Stripe SDK |
+| Image Storage | Cloudinary |
+| Security | Helmet, express-rate-limit, express-mongo-sanitize |
+
+### ML Microservice
+| Layer | Technology |
+|---|---|
+| Runtime | Python 3.11 |
+| Framework | FastAPI + Uvicorn |
+| Vision Model | CLIP ViT-B/32 (open-clip-torch) |
+| Fraud Classifier | LightGBM (gradient boosted trees) |
+| Price Estimation | kNN + quantile regression |
+| ANN Search | HNSW index (via hnswlib) |
+| Calibration | Isotonic / Sigmoid probability calibration |
+
+---
+
+## 4. Repository Structure
+
+```
+Resell/
++-- frontend/                  # React + Vite SPA
+|   +-- src/
+|   |   +-- components/        # Reusable UI components
+|   |   +-- contexts/          # Auth, Socket, Currency, Theme providers
+|   |   +-- hooks/             # Custom React hooks
+|   |   +-- pages/             # Route-level page components (25 pages)
+|   |   +-- services/          # Axios API call wrappers
+|   |   +-- styles/            # Global CSS + responsive SCSS
+|   |   +-- utils/             # Helper utilities
+|   |   +-- App.jsx            # Router & layout
+|   |   +-- main.jsx           # Entry point + providers
+|   +-- tailwind.config.js
+|   +-- vite.config.js
+|
++-- backend/
+|   +-- src/
+|       +-- config/            # DB connection, env validation
+|       +-- controllers/       # Route handlers (13 controllers)
+|       +-- middleware/        # Auth, upload, error middleware
+|       +-- models/            # 14 Mongoose schemas
+|       +-- queues/            # BullMQ queue definitions
+|       +-- routes/            # Express routers
+|       +-- services/          # Business logic & ML integrations
+|       |   +-- fraudDetection.js       # Unified risk engine
+|       |   +-- imageHash.js            # DCT pHash implementation
+|       |   +-- imageClassifier.js      # MobileNet via TF.js
+|       |   +-- computerVision.js       # Condition / damage scoring
+|       |   +-- productFingerprint.js   # CNN cosine similarity
+|       |   +-- identityVerification.js # Serial/IMEI/VIN registry
+|       |   +-- provenance.js           # Ownership chain
+|       |   +-- trustScore.js           # Seller trust score
+|       |   +-- priceRecommendation.js  # AI price engine
+|       |   +-- mlClient.js             # HTTP client -> ML service
+|       |   +-- vectorSearch.js         # CLIP vector queries
+|       |   +-- exchangeRates.js        # Live FX rates
+|       |   +-- stripeService.js        # Stripe checkout & webhooks
+|       +-- sockets/           # Socket.IO event handlers
+|       +-- workers/           # BullMQ worker processes
+|       +-- server.js          # Express app entry point
+|
++-- ml-service/                # Python FastAPI microservice
+|   +-- models/                # CLIP model wrapper
+|   +-- pipeline/              # v2 pipeline modules
+|   |   +-- fraud_v2.py        # LightGBM fraud classifier
+|   |   +-- price_v2.py        # Quantile price estimator
+|   |   +-- ann_index.py       # HNSW ANN index
+|   |   +-- embedding_cache.py # In-memory embedding cache
+|   |   +-- logging_store.py   # Prediction logging + drift
+|   |   +-- vision_llm.py      # Vision LLM integration
+|   |   +-- config.py          # Feature flags & thresholds
+|   +-- services/              # Legacy pipeline (v1)
+|   +-- training/              # Model training scripts
+|   +-- eval/                  # Evaluation scripts
+|   +-- main.py                # FastAPI app & endpoints
+|   +-- requirements.txt
+|   +-- Dockerfile
+|
++-- docker-compose.yml         # Full stack orchestration
++-- .env.example               # Environment variable template
+```
+
+---
+
+## 5. Frontend
+
+### Pages
+
+| Page | Path | Description |
 |---|---|---|
-| **Frontend** | React 18, React Router 6, Vite 5 | SPA UI & routing & bundling |
-| **Styling** | Tailwind CSS 3, PostCSS, Autoprefixer | Utility-first styling |
-| **Animation** | Framer Motion 10 | Page transitions, micro-interactions |
-| **Icons** | lucide-react, react-icons | Iconography |
-| **State / Data** | Axios 1, React Context (Auth, Socket, Currency) | HTTP & global state |
-| **Realtime (client)** | socket.io-client 4 | WebSocket messaging |
-| **Backend runtime** | Node.js ≥18 (`backend/package.json:49`) | Server runtime |
-| **API** | Express 4 | REST API |
-| **Database** | MongoDB + Mongoose 7 | Persistence & ODM |
-| **Realtime (server)** | Socket.io 4 | Presence, chat, notifications |
-| **Queue** | BullMQ 5 + ioredis 5 + Redis | Background jobs (image processing, price sweep) |
-| **Image pipeline** | sharp 0.32, multer 2 (memoryStorage), Cloudinary 1.41 | Upload, transform, CDN storage |
-| **Auth** | jsonwebtoken 9, bcryptjs 2, cookie-parser 1 | JWT (httpOnly cookies), hashing |
-| **Validation** | express-validator 7 | Request validation |
-| **Security** | helmet 7, cors 2, express-rate-limit 7, express-mongo-sanitize 2, compression 1, morgan 1 | Hardening & observability |
-| **Payments** | stripe 17 | Checkout Sessions & webhooks |
-| **ML** | @tensorflow/tfjs 4, @tensorflow-models/mobilenet 2, sharp, crypto (Node built-in) | Image classification, pHash, CV heuristics |
-| **HTTP (server)** | axios 1 | Exchange-rate fetch, optional ML service |
-| **Testing (backend)** | Jest 29, Supertest 6, mongodb-memory-server 9, socket.io-client 4 | API & socket tests (20 suites) |
-| **Testing (frontend)** | Vitest 1, Testing Library (react/jest-dom/user-event), jsdom 24 | Component tests |
-| **Tooling** | nodemon 3, Vite plugin-react, ESLint (via Vite) | Dev experience |
+| `Home` | `/` | Hero, featured listings, categories |
+| `Marketplace` | `/marketplace` | Browse, filter, search all listings |
+| `ProductDetail` | `/products/:id` | Full listing + fraud indicators + reviews |
+| `SellProduct` | `/sell` | Multi-step listing creation with AI assist |
+| `EditProduct` | `/products/:id/edit` | Edit existing listing |
+| `MyProducts` | `/my-products` | Seller's own listings |
+| `Chat` | `/chat` | Real-time messaging with socket presence |
+| `Offers` | `/offers` | Offer management (make / counter / accept) |
+| `Checkout` | `/checkout/:id` | Stripe payment flow |
+| `Orders` | `/orders` | Order history |
+| `OrderDetail` | `/orders/:id` | Order tracking & management |
+| `Favorites` | `/favorites` | Saved listings |
+| `Profile` | `/profile` | User settings |
+| `SellerProfile` | `/sellers/:id` | Public seller page + trust score |
+| `AdminDashboard` | `/admin` | Platform analytics & moderation |
+| `AdminProducts` | `/admin/products` | Listing management |
+| `AdminUsers` | `/admin/users` | User management |
+| `AdminReports` | `/admin/reports` | Report queue |
+| `AdminCategories` | `/admin/categories` | Category management |
 
-> **Note on ML libraries:** this repository does **not** use Python ML libraries (no `requirements.txt`, no `scikit-learn`/`PyTorch`/etc.). All ML runs in Node.js via TensorFlow.js + heuristics. If you need a Python service, set `ML_SERVICE_URL` and implement it externally — `backend/src/services/cvAdapter.js` will delegate.
+### Context Providers
 
----
-
-## Architecture
-
-```text
-                    ┌─────────────────────┐
-                    │   React 18 + Vite    │
-                    │  Tailwind + Motion   │
-                    │  (port 3000 dev)     │
-                    └────────┬────────────┘
-                             │  REST (/api) + Socket.io
-                             │  proxy: /api, /socket.io → :5000
-                             ▼
-                    ┌─────────────────────┐
-                    │  Node.js + Express   │
-                    │  (port 5000)         │
-                    │  Helmet/CORS/Rate    │
-                    │  Limit/Sanitize      │
-                    └──┬───┬───┬───┬──────┘
-                       │   │   │   │
-              ┌────────┘   │   │   └────────┐
-              ▼            ▼   ▼            ▼
-         MongoDB      Cloudinary  BullMQ/Redis   Stripe
-         Mongoose     (images)   (workers)     (checkout)
-              │            │       │  │
-              │            │   ┌───┘  └────┐
-              │            │   ▼           ▼
-              │            │ imageProcessor  priceAnalyzer
-              │            │ sharp+upload  priceRecommendation
-              └────────────┴───┴────────────┘
-                       │
-              ┌────────┴────────┐
-              ▼                 ▼
-        TF.js MobileNet    pHash (DCT) + CV
-        imageClassifier    imageHash / computerVision
-              │                 │
-              └────────┬────────┘
-                       ▼
-                 fraudDetection
-                 trustScore
-                 → Product.aiAnalysis
-```
-
-**Request flow:**
-
-1. User interacts with React app (`frontend/src/pages/*`, `frontend/src/components/*`). `frontend/src/services/api.js` and `services.js` call `VITE_API_URL`; `SocketContext.jsx` connects to `VITE_SOCKET_URL`.
-2. Vite dev server (`frontend/vite.config.js:12`, port `3000`) proxies `/api` and `/socket.io` to `http://127.0.0.1:5000` so cookies/CORS work locally.
-3. Express (`backend/src/server.js:28`) applies `helmet` (CSP, HSTS, etc.), `compression`, `cors({ credentials: true, origin: CLIENT_URL })`, `express.json({ limit: '10mb' })`, `cookieParser`, `mongoSanitize`, `morgan` (dev), and per-route rate limiters.
-4. MongoDB stores all domain data via Mongoose models (`backend/src/models/*`).
-5. Cloudinary stores images after `sharp` transform (`backend/src/config/cloudinary.js:42` → `1200×1200`, `auto:good`, `auto` format).
-6. Socket.io (`backend/src/sockets/index.js:7`) authenticates via Bearer or cookie JWT and drives presence/chat/notifications.
-7. BullMQ queues decouple heavy work: `imageProcessor` handles Cloudinary uploads + CV/hashing; `priceAnalyzer` refines `priceRecommendation` as comparables arrive.
-8. Stripe handles payments: `POST /api/checkout/session` creates a Checkout Session; `POST /api/checkout/webhook` (raw body, `backend/src/server.js:68`) confirms orders.
+- **AuthContext** — JWT authentication, refresh token rotation, user state
+- **SocketContext** — Socket.IO connection lifecycle, real-time events
+- **CurrencyContext** — Live exchange rates, multi-currency formatting
+- **ThemeContext** — Dark/light mode persistence
 
 ---
 
-## Project Structure
+## 6. Backend API
 
-> Generated from the actual repository. `node_modules`, `dist`, and OS files omitted.
+The backend is a monolithic Express application running on **port 5000**.
 
-```text
-ReSell/
-├── backend/
-│   ├── Dockerfile
-│   ├── jest.global.setup.js        # starts mongodb-memory-server for tests
-│   ├── jest.global.teardown.js
-│   ├── jest.setup.js
-│   ├── package.json                # scripts: start/dev/seed/test/worker/worker:price
-│   ├── .env.example
-│   ├── .env                        # local (gitignored)
-│   ├── scripts/
-│   │   ├── portGuard.js
-│   │   └── restartBackend.js
-│   └── src/
-│       ├── server.js               # Express app + Socket.io + rate limiters + graceful shutdown
-│       ├── config/
-│       │   ├── db.js               # mongoose.connect(MONGODB_URI)
-│       │   ├── cloudinary.js       # uploadToCloudinary / deleteFromCloudinary
-│       │   └── validateEnv.js      # required/optional env validation
-│       ├── controllers/            # 13 controllers
-│       │   ├── adminController.js
-│       │   ├── authController.js
-│       │   ├── categoryController.js
-│       │   ├── chatController.js
-│       │   ├── checkoutController.js
-│       │   ├── exchangeController.js
-│       │   ├── favoriteController.js
-│       │   ├── notificationController.js
-│       │   ├── offerController.js
-│       │   ├── orderController.js
-│       │   ├── productController.js
-│       │   ├── reportController.js
-│       │   └── sellerController.js
-│       ├── middleware/
-│       │   ├── auth.js             # protect / authorize / optionalAuth
-│       │   ├── audit.js
-│       │   ├── rateLimiters.js     # productCreateLimiter, chatLimiter
-│       │   ├── upload.js           # multer memoryStorage, 8 files × 10MB, image/* only
-│       │   └── validate.js         # express-validator chains
-│       ├── models/                 # 12 Mongoose schemas
-│       │   ├── User.js
-│       │   ├── Product.js          # includes aiAnalysis subdocument
-│       │   ├── Category.js
-│       │   ├── Conversation.js
-│       │   ├── Message.js
-│       │   ├── Favorite.js
-│       │   ├── Offer.js
-│       │   ├── Sale.js
-│       │   ├── Order.js            # (orderController)
-│       │   ├── Review.js
-│       │   ├── Report.js
-│       │   ├── Notification.js
-│       │   └── AuditLog.js
-│       ├── routes/                 # 13 route modules → /api/*
-│       │   ├── authRoutes.js
-│       │   ├── productRoutes.js
-│       │   ├── categoryRoutes.js
-│       │   ├── favoriteRoutes.js
-│       │   ├── chatRoutes.js
-│       │   ├── reportRoutes.js
-│       │   ├── sellerRoutes.js
-│       │   ├── adminRoutes.js
-│       │   ├── exchangeRoutes.js
-│       │   ├── offerRoutes.js
-│       │   ├── notificationRoutes.js
-│       │   ├── orderRoutes.js
-│       │   └── checkoutRoutes.js
-│       ├── services/               # 13 services
-│       │   ├── priceRecommendation.js
-│       │   ├── imageClassifier.js  # TF.js MobileNet
-│       │   ├── imageHash.js        # 64-bit pHash (DCT)
-│       │   ├── fraudDetection.js
-│       │   ├── trustScore.js
-│       │   ├── computerVision.js
-│       │   ├── cvAdapter.js        # delegates to ML_SERVICE_URL if set
-│       │   ├── similarProducts.js
-│       │   ├── priceSweep.js
-│       │   ├── exchangeRates.js
-│       │   ├── stripeService.js
-│       │   ├── chatService.js
-│       │   └── notificationService.js
-│       ├── queues/
-│       │   └── index.js            # BullMQ queue + registerSweepJob
-│       ├── workers/
-│       │   ├── imageProcessor.js
-│       │   └── priceAnalyzer.js
-│       ├── sockets/
-│       │   └── index.js            # Socket.io auth + rooms + chat events
-│       ├── scripts/
-│       │   ├── seedDemo.js
-│       │   └── validate-duplicate-threshold.js
-│       ├── utils/
-│       │   ├── jwt.js              # generateToken/verifyToken/setTokenCookies
-│       │   ├── tokenBlacklist.js
-│       │   ├── errorHandler.js
-│       │   ├── AppError.js
-│       │   ├── slug.js
-│       │   ├── mongoId.js
-│       │   ├── seed.js
-│       │   └── generateFixtures.js
-│       └── __tests__/              # 20 test suites
-│           ├── auth.test.js
-│           ├── products.test.js
-│           ├── chat.test.js
-│           ├── socket.test.js
-│           └── ...
-│
-├── frontend/
-│   ├── Dockerfile
-│   ├── nginx.conf
-│   ├── index.html
-│   ├── vite.config.js              # dev port 3000, proxy /api → :5000
-│   ├── vitest.config.js
-│   ├── tailwind.config.js
-│   ├── postcss.config.js
-│   ├── package.json                # scripts: dev/build/preview/test
-│   ├── .env.example
-│   ├── .env
-│   ├── public/
-│   │   ├── favicon.svg
-│   │   └── health.json
-│   └── src/
-│       ├── main.jsx
-│       ├── App.jsx                 # React Router routes
-│       ├── components/
-│       │   ├── layout/             # Navbar, Footer, Hero, PageTransition
-│       │   ├── product/            # ProductCard, ImageGallery, SellForm, SellerInfo, AIAnalysisPanel
-│       │   ├── checkout/           # DeliveryAddressForm
-│       │   ├── admin/              # AdminLayout
-│       │   └── ui/                 # Loader, Skeleton, TrustBadge, Price, CurrencySelector, etc.
-│       ├── pages/                  # 23 pages: Home, Marketplace, ProductDetail, SellProduct, EditProduct,
-│       │   │                       # Login, Register, Profile, SellerProfile, Chat, Checkout, Orders,
-│       │   │                       # Favorites, MyProducts, Admin* (Dashboard/Analytics/Products/Users/Reports/Categories)
-│       ├── contexts/
-│       │   ├── AuthContext.jsx
-│       │   ├── SocketContext.jsx
-│       │   └── CurrencyContext.jsx
-│       ├── services/
-│       │   ├── api.js              # axios instance (VITE_API_URL, withCredentials)
-│       │   └── services.js
-│       ├── hooks/
-│       │   ├── useFormatPrice.js
-│       │   └── useLocationDetector.js
-│       ├── utils/
-│       │   ├── currency.js
-│       │   ├── format.js
-│       │   └── geolocation.js
-│       ├── styles/
-│       │   └── index.css
-│       └── test/
-│           ├── setup.js
-│           ├── test-utils.jsx
-│           └── __tests__/smoke.test.jsx
-│
-├── .gitignore
-└── README.md
-```
+### Registered Routes
 
----
-
-## Installation & Setup
-
-### Prerequisites
-
-| Requirement | Version / Notes | How to verify |
+| Prefix | Controller | Key Endpoints |
 |---|---|---|
-| **Node.js** | `≥18.0.0` (`backend/package.json:49` engines) | `node -v` |
-| **npm** | ships with Node 18 | `npm -v` |
-| **MongoDB** | 5+ (local or Atlas) — `MONGODB_URI` required | `mongosh --version` |
-| **Redis** | 6+ (only if using BullMQ workers) — `REDIS_URL` defaults to `redis://localhost:6379` | `redis-cli ping` |
-| **Cloudinary account** | Free tier works — get creds at https://cloudinary.com/console | — |
-| **Stripe account** | Required in production; optional in dev (checkout disabled if missing) | — |
-| **Git** | any recent | `git --version` |
+| `/api/auth` | authController | POST /register, POST /login, POST /logout, POST /refresh |
+| `/api/products` | productController | GET /, POST /, GET /:id, PUT /:id, DELETE /:id, GET /:id/similar, GET /:id/identity |
+| `/api/categories` | categoryController | GET /, POST /, PUT /:id, DELETE /:id |
+| `/api/sellers` | sellerController | GET /:id, GET /:id/trust |
+| `/api/offers` | offerController | POST /, GET /, PUT /:id/accept, PUT /:id/counter, PUT /:id/reject |
+| `/api/chat` | chatController | POST /conversations, GET /conversations, POST /:id/messages |
+| `/api/orders` | orderController | GET /, GET /:id, PUT /:id/cancel, PUT /:id/ship |
+| `/api/checkout` | checkoutController | POST /create-session, POST /webhook |
+| `/api/favorites` | favoriteController | POST /:productId, DELETE /:productId, GET / |
+| `/api/reports` | reportController | POST /, GET / |
+| `/api/notifications` | notificationController | GET /, PUT /:id/read |
+| `/api/exchange-rates` | exchangeController | GET / |
+| `/api/admin` | adminController | Users, products, reports management |
 
-No Python runtime or `requirements.txt` is required — ML runs in Node.js.
+### Rate Limits
 
-### Clone
+| Endpoint | Window | Max Requests |
+|---|---|---|
+| All `/api/*` | 15 min | 500 |
+| `/api/auth/login` | 15 min | 20 |
+| `/api/auth/register` | 15 min | 20 |
+| Product creation | 1 hour | 20 |
+| Chat messages | 1 min | 60 |
 
-```bash
-git clone <repository-url>
-cd ReSell
+---
+
+## 7. ML / AI System — Deep Dive
+
+The fraud detection, condition assessment, and price recommendation system is split across two layers:
+
+1. **Node.js services** — lightweight, always-on analysis using TF.js MobileNet + Sharp pixel analysis
+2. **Python ML microservice** — heavier CLIP + LightGBM models, called asynchronously via HTTP
+
+### 7.1 Image Fraud Detection Pipeline
+
+Every image uploaded triggers a sequential analysis pipeline inside the `imageProcessor` BullMQ worker. The results are aggregated into a single **risk score (0-100)** with human-readable `factors[]`.
+
+```
+Image Upload
+    |
+    +- Step 1: pHash (64-bit DCT) + mirror pHash
+    |          -> compare against all listings in same category (up to 500)
+    |          -> Hamming distance <= 12 -> +35 risk points
+    |
+    +- Step 2: MobileNet classification
+    |          -> top ImageNet labels -> ReSell category taxonomy
+    |          -> auto-fills category if confidence >= 0.15
+    |
+    +- Step 3: Condition assessment (Sharp pixel analysis)
+    |          -> brightness / contrast / sharpness -> score 30-100
+    |          -> label: like-new / good / fair / poor
+    |
+    +- Step 4: Damage detection (heuristic)
+    |          -> edge density via Sobel-like gradient
+    |          -> score 0-100 (higher = more damage)
+    |
+    +- Step 5: CNN feature extraction (MobileNet penultimate layer)
+    |          -> 1024-dim feature vector stored per image
+    |
+    +- Step 6: CLIP embedding (via ML service HTTP call)
+    |          -> 512-dim normalized vector stored per image
+    |
+    +- Step 7: Identity verification (if serial/IMEI provided)
+    |          -> registry lookup -> ownership signals
+    |
+    +- Step 8: Visual fingerprint similarity
+    |          -> cosine similarity against up to 200 candidates
+    |          -> similarity >= 0.90 -> supporting risk signal
+    |
+    +- Step 9: Aggregate risk score -> product.aiAnalysis updated
 ```
 
-> Replace `<repository-url>` with the actual remote (e.g. `https://github.com/<org>/ReSell.git`). Do not invent a URL if you don't know it — use the URL from which you cloned.
+### 7.2 Perceptual Hashing (pHash)
 
-### Install Dependencies
+**File:** `backend/src/services/imageHash.js`
 
-```bash
-# Backend
-cd backend
-npm install
+The system implements a **64-bit DCT-based perceptual hash** — the industry-standard algorithm for near-duplicate image detection.
 
-# Frontend (from repo root)
-cd ../frontend
-npm install
+#### Algorithm
+
+```
+1. Resize image -> 32x32 grayscale (via Sharp)
+2. Compute 2D Discrete Cosine Transform (DCT)
+   - Uses a precomputed cosine lookup table (COS_TABLE)
+     to avoid ~65,000 Math.cos() calls per image
+3. Extract the top-left 8x8 DCT block (64 lowest frequencies)
+4. Compute median of the 64 coefficients
+5. Hash bit[i] = 1 if coeff[i] >= median, else 0
+6. Encode 64 bits as 16-char hex string
+```
+
+#### Duplicate Detection
+
+```js
+// Hamming distance between two 64-bit hex hashes
+const hammingDistance = (hash1, hash2) => {
+  const bin1 = BigInt('0x' + hash1).toString(2).padStart(64, '0');
+  const bin2 = BigInt('0x' + hash2).toString(2).padStart(64, '0');
+  // count differing bits
+};
+
+// Threshold: <= 12 = duplicate (validated on real photos)
+// Observed: same-item variants -> max distance 12
+//           different products -> min distance 30 (18-point margin)
+const HASH_SIMILARITY_THRESHOLD = 12;
+```
+
+#### Mirror Hash (Anti-Evasion)
+
+A known fraud tactic is **horizontally flipping a stolen image** to evade pHash detection (the DCT hash of a flipped image differs by an observed Hamming distance of ~53). The system counters this by storing **two hashes per image**: the normal pHash and the pHash of the horizontally flipped version:
+
+```js
+const mirrorPerceptualHashFromBuffer = async (imageBuffer) => {
+  const flopped = await sharp(imageBuffer).flop().png().toBuffer();
+  return perceptualHashFromBuffer(flopped);
+};
+```
+
+Fraud check: A new upload's `[normalHash, mirrorHash]` pair is compared against every existing listing's pair. A mirrored stolen image's `normalHash` matches the original's `mirrorHash`.
+
+### 7.3 MobileNet Image Classification
+
+**File:** `backend/src/services/imageClassifier.js`
+
+Uses **TensorFlow.js + @tensorflow-models/mobilenet v2 (alpha 1.0)** to classify uploaded images into ReSell's category taxonomy.
+
+#### Inference Pipeline
+
+```
+imageBuffer (raw bytes from Cloudinary upload)
+    |
+    v Sharp: resize to 224x224, removeAlpha(), raw RGB pixels
+    |
+    v Float32Array: pixel[i] / 255.0 (normalize 0 to 1)
+    |
+    v tf.tensor4d([1, 224, 224, 3])
+    |
+    v mobilenet.classify(tensor, topK=10) -> [{className, probability}]
+    |
+    v Map ImageNet labels -> ReSell categories
+      (150+ label-to-category mappings defined)
+    |
+    v Aggregate probabilities per category -> pick winner
+    |
+    v Confidence >= 0.15 -> auto-fill category suggestion
+```
+
+#### Label Mapping Example
+
+```js
+const IMAGENET_TO_CATEGORY = {
+  'cellular telephone': 'Electronics',
+  'laptop': 'Electronics',
+  'sneaker': 'Fashion',
+  'handbag': 'Fashion',
+  'sofa': 'Home & Garden',
+  'barbell': 'Sports & Outdoors',
+  'book': 'Books & Media',
+  // ... 150+ mappings covering all categories
+};
+```
+
+#### Confidence Fusion with Keywords
+
+The system fuses two independent signals:
+
+| Scenario | Source used | Result |
+|---|---|---|
+| MobileNet conf >= 0.15 | `image-model` | Category from model |
+| MobileNet + keyword agree | `image-model+keyword` | Confidence +0.10 |
+| MobileNet sub-threshold, keyword agrees | `image-model+keyword` | Capped at 0.95 |
+| Only keyword matches | `keyword` | Low confidence |
+| No match | `none` | Returns "Other" |
+
+### 7.4 CNN Product Fingerprinting
+
+**File:** `backend/src/services/productFingerprint.js`
+
+While pHash detects **identical image copies**, the CNN fingerprint detects **the same physical product appearance** across different photos (different angles, backgrounds, lighting).
+
+#### How It Works
+
+```
+Per listing: collect all images with cnnFeatures (MobileNet embeddings)
+          |
+          v
+Build aggregate fingerprint:
+  - Unit-normalized mean of all per-image feature vectors
+  - Creates a single representative vector for the listing
+          |
+          v
+Cross-listing comparison (up to 200 candidates):
+  For each image in listing A:
+    For each image in listing B:
+      cosine_similarity(featureA, featureB)
+    Keep best match per A-image
+  aggregateSimilarity = mean of all best matches
+          |
+          v
+Thresholds (configurable via env vars):
+  MEDIUM_SIMILARITY_THRESHOLD = 0.90  -> supporting signal (weight: 10)
+  STRONG_SIMILARITY_THRESHOLD = 0.97  -> supporting signal (weight: 20)
+```
+
+> **Important design decision:** Visual similarity alone is **never proof of fraud**. Two sellers may legitimately own the same model (e.g., iPhone 15 Pro). The visual fingerprint is always a *supporting signal* combined with other evidence. It can never push a listing to high risk by itself.
+
+### 7.5 Computer Vision — Damage & Condition Scoring
+
+**File:** `backend/src/services/computerVision.js`
+
+Uses **Sharp** for pixel-level image analysis without requiring any external ML model.
+
+#### Condition Score (100 to 30, lower = worse)
+
+```
+Base score: 100
+
+Brightness (0-255 mean across channels):
+  < 60    -> -15 pts  ("Image is dark")
+  > 220   -> -10 pts  ("Image is overexposed")
+  else    ->  0 pts   ("Good lighting")
+
+Contrast (std dev per channel):
+  < 20    -> -10 pts  ("Low contrast - possible dull surface")
+  > 80    ->  0 pts   ("High detail contrast")
+
+Sharpness (heuristic = contrast x 0.8 + brightness x 0.2):
+  < 30    ->  -8 pts  ("Image blur detected")
+
+Final: clamped to [30, 100]
+Labels: >= 90 -> like-new | >= 75 -> good | >= 60 -> fair | else -> poor
+```
+
+#### Damage Score (0 to 100, higher = more damage)
+
+```
+Heuristic pixel signals:
+  contrast > 70 AND brightness < 130 -> +25 ("Possible surface scratches")
+  sharpness < 25                      -> +15 ("Possible wear or dull finish")
+  brightness < 80                     -> +10 ("Dark spots may indicate damage")
+
+Edge density analysis (Sobel-like gradient on 64x64 grayscale thumbnail):
+  For each pixel, compute |gx| + |gy| (horizontal + vertical gradient)
+  edgeRatio = pixels_with_gradient > 60 / total_pixels
+
+  edgeRatio > 0.35  -> +20 ("High edge density - possible cracks or heavy wear")
+  edgeRatio < 0.08  ->  +0 ("Smooth surface")
+
+Final: clamped to [0, 100]
+Levels: >= 50 -> high | >= 25 -> medium | else -> low
+```
+
+These scores feed into:
+1. The **price recommendation engine** (CV score adjusts the recommended price)
+2. The **fraud risk engine** (damage score >= 60 adds +5 risk points)
+
+### 7.6 Identity Verification & Provenance
+
+**Files:** `backend/src/services/identityVerification.js` · `backend/src/services/provenance.js`
+
+A product registry for physical identifiers (serial numbers, IMEI, VIN).
+
+#### Ownership Lifecycle
+
+```
+NEW identifier submitted
+    -> Hash identifier (SHA-256, never stored raw)
+    -> Create ProductIdentity record
+    -> Issue 6-digit verification code (TOTP-like)
+    -> Seller verifies by entering the code (proof-of-possession)
+
+EXISTING identifier submitted
+    +- Same owner?              -> Legitimate relist (low risk)
+    +- Verified sale/transfer?  -> Legitimate resale (low risk)
+    +- No verified transfer?    -> OWNERSHIP_MISMATCH signal (+35 risk)
+    +- Reported stolen?         -> REPORTED_STOLEN_PRODUCT signal (+100 risk)
+```
+
+#### Fraud Signals from Identity
+
+| Signal | Weight | Meaning |
+|---|---|---|
+| `PRODUCT_IDENTIFIER_REUSED` | +10 | Identifier used in another listing |
+| `MULTIPLE_ACTIVE_LISTINGS` | +30 | Same physical item listed multiple times |
+| `OWNERSHIP_MISMATCH` | +35 | Registered to different owner, no transfer |
+| `NO_VERIFIED_TRANSFER` | +15 | No verified sale found for this identifier |
+| `PROVENANCE_INTEGRITY_FAILURE` | +45 | Chain integrity failure or flagged identity |
+| `REPORTED_STOLEN_PRODUCT` | +100 | Identifier in stolen goods registry |
+| `POSSESSION_VERIFICATION_FAILED` | +10 | Wrong verification code submitted |
+
+> **Key semantic:** An identifier being *reused* is never automatically fraud. Same identifier + legitimate ownership transfer = normal resale. Same identifier + conflicting ownership + no transfer = suspicious.
+
+### 7.7 Seller Trust Score
+
+**File:** `backend/src/services/trustScore.js`
+
+A transparent **0-100 seller trust score** with six independently calculated components:
+
+| Component | Max Points | Calculation |
+|---|---|---|
+| Account Age | 15 | `(days / 365) x 15` — grows linearly over one year |
+| Sales Volume | 20 | `log10(salesCount + 1) x 10` — logarithmic to prevent gaming |
+| Average Rating | 25 | `(avgRating / 5) x 25` — default 3.5/5 for new sellers |
+| Response Time | 15 | `15 - (avgResponseMinutes / 60) x 5` — faster = higher |
+| Complaint-Free | 15 | `(1 - complaints/20) x 15` — penalizes reports |
+| Listing Quality | 10 | Average images per listing + description length ratio |
+
+**Trust Levels:**
+- 0-24: new
+- 25-44: developing
+- 45-64: established
+- 65-79: trusted
+- 80-100: excellent
+
+### 7.8 Price Recommendation Engine
+
+**File:** `backend/src/services/priceRecommendation.js`
+
+A transparent, multi-factor pricing algorithm with full audit trail.
+
+#### Step 1: Base Price Calculation
+
+```
+If originalPrice (MSRP) is provided:
+  base = originalPrice
+       x (1 - depreciationRate) ^ yearsUsed
+       x brandMultiplier
+       x conditionMultiplier
+
+Depreciation rates by category (annual):
+  Electronics: 18% | Fashion: 30% | Home & Garden: 10%
+  Sports: 15% | Books: 25% | Automotive: 10%
+
+Brand multipliers:
+  Apple: 1.10x | Nike: 1.05x | Samsung: 1.02x | default: 1.00x
+
+Condition multipliers:
+  new: 0.95 | like-new: 0.82 | good: 0.65 | fair: 0.45 | poor: 0.25
+```
+
+#### Step 2: CV Adjustments
+
+```
+CV condition score (0-100):
+  factor = (score/100) x 0.4 + 0.6
+  Maps: score 0 -> 0.6x penalty | score 100 -> 1.0x (no change)
+
+Damage score (0-100):
+  factor = max(0.7, 1 - score/250)
+  Maps: score 0 -> 1.0x | score 100 -> 0.7x (max 30% penalty)
+```
+
+#### Step 3: Comparable Listings Blending
+
+```
+If >= 3 comparables available:
+  1. Filter to same condition as listing
+  2. Compute median of same-condition comparable prices
+  3. Remove outliers via IQR (Tukey's fence)
+  4. Blend: 70% own calculation + 30% market median
+
+IQR outlier removal prevents manipulated listings from skewing recommendations.
+```
+
+#### Step 4: Output
+
+```
+recommendedPrice +/- 15% -> [minPrice, maxPrice]
+
+Confidence score:
+  0.5 base
+  +0.20 if MSRP provided
+  +0.10 if comparables provided
+  +0.10 if CV score available
+  +0.05 if damage score available
+  Max: 0.95
+```
+
+### 7.9 Risk Scoring — Unified Fraud Engine
+
+**File:** `backend/src/services/fraudDetection.js`
+
+All signals are aggregated into a single score by the `detectRisk()` function:
+
+| Signal | Risk Points |
+|---|---|
+| Duplicate image (pHash Hamming distance <= 12) | +35 |
+| Price < 15% of original | +25 |
+| Price > 150% of original | +10 |
+| High-value listing (>5000) from account < 30 days old | +15 |
+| Same description in >= 2 other active listings | +20 |
+| Seller has > 3 reports against them | +15 |
+| AI damage score >= 60 | +5 |
+| Identity signals (OWNERSHIP_MISMATCH, etc.) | +10 to +100 |
+| Visual CNN fingerprint similarity | +10 to +20 |
+
+```
+riskScore = clamp(sum of all signals, 0, 100)
+Risk level: < 25 -> low | 25-49 -> medium | >= 50 -> high
+```
+
+The score and `factors[]` array are stored in `product.aiAnalysis.riskScore` and displayed prominently in the product detail page.
+
+---
+
+## 8. ML Microservice (Python / FastAPI)
+
+**Location:** `ml-service/` · **Port:** 8000 · **API Docs:** http://localhost:8000/docs
+
+### 8.1 CLIP Embeddings
+
+Uses **OpenCLIP ViT-B/32** (configurable via `CLIP_MODEL_NAME` / `CLIP_PRETRAINED`):
+
+```
+POST /embed
+  Input:  { imageUrl: "https://..." }
+  Output: { embedding: [512 floats], dimension: 512, processing_time_ms: ... }
+
+POST /text-embed
+  Input:  { text: "iPhone 15 Pro Max 256GB" }
+  Output: { embedding: [512 floats], dimension: 512 }
+```
+
+All embeddings are **L2-normalized** so cosine similarity = dot product.
+
+CLIP captures multi-modal semantics — images and text exist in the same vector space, enabling:
+- Image-to-image similarity (same listing in different lighting/backgrounds)
+- Text-to-image semantic matching (detecting "iPhone" listing with irrelevant image = potential fraud)
+- Semantic similarity search across the marketplace
+
+### 8.2 LightGBM Fraud Pipeline v2
+
+**File:** `ml-service/pipeline/fraud_v2.py`
+
+The v2 pipeline replaces the hand-weighted v1 rule engine with a **calibrated LightGBM binary classifier** trained on real fraud outcomes.
+
+#### Feature Engineering (14 features)
+
+| Feature | Type | Description |
+|---|---|---|
+| `max_cross_seller_emb_sim` | float | Max CLIP cosine similarity to any *other* seller's listings |
+| `min_cross_phash_dist` | int | Min Hamming distance to any other seller's pHash |
+| `cross_phash_exact` | bool | Any cross-seller pHash distance <= threshold |
+| `max_same_seller_emb_sim` | float | Max CLIP similarity to same seller's own listings |
+| `same_seller_relist` | bool | Seller is relisting their own previously sold item |
+| `clip_image_text_sim` | float | Cosine similarity between listing image and title embeddings |
+| `price_zscore_category` | float | Z-score of price vs category median (clipped to +-10) |
+| `log_account_age_hours` | float | log1p(account age in hours) |
+| `listings_per_hour` | float | Listing rate (spam signal) |
+| `aspect_ratio` | float | Image width / height ratio |
+| `is_stock_dimensions` | bool | Exactly 800x600 or 1200x900 (common stock photo dimensions) |
+| `has_suspicious_software` | bool | Title/desc contains suspicious terms |
+| `vision_llm_flag_count` | int | Number of flags from Vision LLM analysis |
+| `vision_llm_confidence` | float | Vision LLM confidence score |
+
+#### Vision LLM Integration
+
+The Vision LLM (`pipeline/vision_llm.py`) is only called when the LightGBM score falls in the **uncertainty band** (configurable range, e.g. 0.3-0.7). This design:
+- Reduces inference cost by ~70% (most listings are clearly legitimate or clearly fraudulent)
+- Provides extra discriminating signal only for genuinely ambiguous cases
+
+#### Probability Calibration
+
+Raw LightGBM `predict_proba` outputs are calibrated using **isotonic regression** (sigmoid fallback when training data is insufficient), converting raw model scores to true probabilities.
+
+### 8.3 Quantile Price Estimation (kNN)
+
+**File:** `ml-service/pipeline/price_v2.py`
+
+```
+POST /price-estimate
+  Input: {
+    listing: { condition, originalPrice, yearsUsed, category },
+    embedding: [512 floats],    // optional CLIP embedding
+    comparables: [...],         // historical sold listings
+    kNeighbors: 5
+  }
+  Output: { suggestedPrice, minPrice, maxPrice, confidence }
+```
+
+When CLIP embeddings are provided, comparable selection is based on **semantic similarity in the embedding space** rather than just category matching. The model computes:
+- P25 (lower bound)
+- P50 (median / suggested price)
+- P75 (upper bound)
+
+Using quantile regression against the k-nearest neighbors in the embedding space.
+
+### 8.4 Shadow Mode & A/B Testing
+
+The ML service supports three operating modes via the `ML_PIPELINE_V2` environment variable:
+
+| Mode | Value | Behavior |
+|---|---|---|
+| Legacy | `0` (default) | v1 rule-based results served to all requests |
+| Shadow | `shadow` | Legacy results **served**; v2 runs in parallel and logs both outputs |
+| Production v2 | `1` | v2 LightGBM results served |
+
+Shadow mode enables safe model validation:
+- Both pipelines log outputs with a shared `recordId`
+- Admins attach outcomes (fraud confirmed / false positive) via `POST /feedback`
+- Drift and accuracy metrics available at `GET /pipeline-stats`
+
+### 8.5 ANN Index (HNSW)
+
+**File:** `ml-service/pipeline/ann_index.py`
+
+A persistent **Hierarchical Navigable Small World (HNSW)** approximate nearest-neighbor index for fast embedding lookups at scale:
+
+- Stores CLIP embeddings indexed by product ID
+- Supports O(log n) k-NN queries (vs O(n) brute-force linear scan)
+- Persists to disk between service restarts
+- Used by the v2 fraud pipeline for fast cross-seller similarity lookups
+
+```
+GET /pipeline-stats
+-> {
+    pipelineVersion: "v2",
+    embeddingCache: { hits, misses, size },
+    annIndex: { size, efConstruction, M },
+    drift: { ... }   // prediction drift metrics over time
+  }
 ```
 
 ---
 
-## Environment Variables
+## 9. Real-Time Features
 
-Copy the examples and fill in real values. **Never commit real secrets.**
+**Socket.IO** powers all real-time features. The backend creates a single `io` instance shared across the application.
 
-### Backend (`backend/.env`)
+### Events
 
-Create `backend/.env` from `backend/.env.example`:
+| Event | Direction | Description |
+|---|---|---|
+| `join_conversation` | Client -> Server | Subscribe to a chat conversation room |
+| `send_message` | Client -> Server | Send a chat message |
+| `new_message` | Server -> Client | Broadcast new message to conversation room |
+| `typing` | Client -> Server | User is typing indicator |
+| `stop_typing` | Client -> Server | User stopped typing |
+| `offer_update` | Server -> Client | Offer accepted / countered / rejected |
+| `notification` | Server -> Client | In-app notification push |
+| `product_status` | Server -> Client | Listing status change (sold, etc.) |
+
+---
+
+## 10. Background Job Workers
+
+Uses **BullMQ** (Redis-backed) for reliable async job processing. Jobs survive server restarts and are retried on failure.
+
+### `imageProcessor` Worker
+
+Triggered when a new product is created. Full processing pipeline:
+
+1. Download images from Cloudinary URLs
+2. Compute pHash + mirrorHash for each image
+3. Run MobileNet category classification
+4. Assess condition score (brightness / contrast / sharpness)
+5. Assess damage score (edge density analysis)
+6. Extract CNN feature vectors (stored per image)
+7. Call ML service for CLIP embedding (stored per image)
+8. Run identity verification if serial/IMEI provided
+9. Compute visual fingerprint similarity against candidates
+10. Run unified fraud risk scoring
+11. Update `product.aiAnalysis` in MongoDB
+
+### `priceAnalyzer` Worker
+
+Triggered on product creation. Calculates fair market price:
+
+1. Fetch comparable listings in same category
+2. Run local price recommendation (depreciation + condition + comparables)
+3. Call ML service for quantile price estimate (if ML service available)
+4. Blend both estimates
+5. Update `product.priceRecommendation` in MongoDB
+
+### Queue Behavior
+
+```
+Redis available:   Jobs queued in Redis, workers process asynchronously
+Redis unavailable: "[Queue] Redis unavailable — queues disabled"
+                   Jobs run synchronously inline (development mode)
+```
+
+---
+
+## 11. Database Models
+
+| Model | Key Fields | Description |
+|---|---|---|
+| `User` | email, password (bcrypt), role, trustScore, complaints | Platform users |
+| `Product` | title, price, images[], aiAnalysis, category, seller, status | Listings |
+| `ProductIdentity` | identifierHash, ownerHistory[], possessionStatus, reportedStolen | Physical product registry |
+| `ProvenanceEvent` | type, from, to, timestamp, verifiedAt, metadata | Ownership chain events |
+| `Sale` | product, buyer, seller, status, stripePaymentId, amount | Completed transactions |
+| `Offer` | product, buyer, seller, amount, status, counterAmount, expiresAt | Price negotiations |
+| `Conversation` | participants[], product, lastMessage | Chat threads |
+| `Message` | conversation, sender, body, read, readAt | Chat messages |
+| `Review` | product, seller, buyer, rating, comment, verified | Seller reviews |
+| `Report` | target, targetType, reason, status, resolvedBy | User/listing reports |
+| `Favorite` | user, product | Saved listings |
+| `Notification` | user, type, payload, read, readAt | In-app notifications |
+| `AuditLog` | action, actor, target, details, ip | Admin audit trail |
+| `Category` | name, slug, icon, description, parentCategory | Category tree |
+
+### Product `aiAnalysis` Subdocument
+
+This is the core ML output stored on every listing:
+
+```js
+aiAnalysis: {
+  // Image hashing
+  imageHashes: [String],        // 16-char hex pHash per image
+  mirrorHashes: [String],       // pHash of horizontally flipped image
+
+  // Computer vision scores
+  conditionScore: Number,       // 0-100 (100 = like-new)
+  conditionLabel: String,       // 'like-new' | 'good' | 'fair' | 'poor'
+  damageScore: Number,          // 0-100 (0 = no damage detected)
+  damageLevel: String,          // 'low' | 'medium' | 'high'
+
+  // Classification
+  suggestedCategory: String,    // MobileNet-suggested category name
+  categoryConfidence: Number,   // 0-1 confidence
+
+  // Fraud risk
+  riskScore: Number,            // 0-100 aggregated fraud risk
+  riskLevel: String,            // 'low' | 'medium' | 'high'
+  riskFactors: [String],        // human-readable explanation of each signal
+
+  // Timestamps
+  processedAt: Date,
+}
+```
+
+---
+
+## 12. Security
+
+| Measure | Implementation |
+|---|---|
+| **Authentication** | JWT access tokens (15 min expiry) + refresh tokens (7 days) in httpOnly cookies |
+| **Password Storage** | bcrypt with 12 salt rounds |
+| **Security Headers** | Helmet.js with strict Content Security Policy |
+| **NoSQL Injection** | express-mongo-sanitize strips `$` and `.` from request data |
+| **Rate Limiting** | Per-endpoint limits via express-rate-limit |
+| **CORS** | Explicit allowlist via `CLIENT_URL` env var only |
+| **Stripe Security** | Webhook signature verification via `STRIPE_WEBHOOK_SECRET` |
+| **Identifier Privacy** | Raw serial numbers / IMEI hashed with SHA-256, never stored or returned |
+| **Image Validation** | Sharp validates image buffers before any ML processing |
+| **Input Validation** | Mongoose schema-level constraints + controller-level checks |
+| **Compression** | Response compression enabled (compression middleware) |
+
+---
+
+## 13. Environment Variables
+
+Copy `.env.example` to `backend/.env`:
 
 ```env
-NODE_ENV=development
+# ─────────────── Server ───────────────
 PORT=5000
-MONGODB_URI=mongodb://localhost:27017/resell
-JWT_SECRET=your-super-secret-jwt-key-change-this-in-production-please
-JWT_EXPIRE=7d
+NODE_ENV=development
 CLIENT_URL=http://localhost:3000
 
-# Cloudinary (https://cloudinary.com/console)
-CLOUDINARY_CLOUD_NAME=
-CLOUDINARY_API_KEY=
-CLOUDINARY_API_SECRET=
+# ─────────────── Database ─────────────
+MONGODB_URI=mongodb://localhost:27017/resell
 
-# Optional ML service (external Python service; omit to use built-in Node ML)
-ML_SERVICE_URL=http://localhost:8000
+# ─────────────── Auth ─────────────────
+JWT_SECRET=your_jwt_secret_here_minimum_32_characters
+JWT_EXPIRE=7d
 
-# Redis (BullMQ queues — defaults to localhost if omitted)
+# ─────────────── Redis ────────────────
+# Optional in dev — queues are disabled gracefully when Redis is unavailable
 REDIS_URL=redis://localhost:6379
 
-# Stripe (required in production; optional in dev)
+# ─────────────── ML Service ───────────
+# Optional in dev — falls back to heuristic analysis when unavailable
+ML_SERVICE_URL=http://localhost:8000
+
+# ─────────────── Cloudinary ───────────
+# Required for image upload to work
+CLOUDINARY_CLOUD_NAME=your_cloud_name
+CLOUDINARY_API_KEY=your_api_key
+CLOUDINARY_API_SECRET=your_api_secret
+
+# ─────────────── Stripe ───────────────
+# Optional — checkout is disabled when not set
 STRIPE_SECRET_KEY=sk_test_...
 STRIPE_WEBHOOK_SECRET=whsec_...
 STRIPE_PUBLISHABLE_KEY=pk_test_...
 
-# Admin seeding
-ADMIN_EMAIL=admin@resell.com
-ADMIN_PASSWORD=Admin@123456
+# ─────────────── ML Thresholds ────────
+HASH_THRESHOLD=8
+CNN_SIMILARITY_THRESHOLD=0.75
+DUPLICATE_CHECK_TIMEOUT=10000
+MAX_IMAGE_SIZE=5242880
+VISUAL_SIMILARITY_MEDIUM_THRESHOLD=0.90
+VISUAL_SIMILARITY_STRONG_THRESHOLD=0.97
 ```
 
-| Variable | Required | Description |
-|---|---|---|
-| `MONGODB_URI` | **Yes** | MongoDB connection string (`backend/src/config/validateEnv.js:2`) |
-| `JWT_SECRET` | **Yes** | HMAC secret for signing JWTs |
-| `JWT_EXPIRE` | No | Access token TTL (default `7d`; `jwt.js:7` falls back to `1h` if unset) |
-| `PORT` | No | Backend port (default `5000`) |
-| `NODE_ENV` | No | `development`/`production`/`test` (default `development`) |
-| `CLIENT_URL` | **Production yes** | Frontend origin for CORS & Socket.io (`backend/src/server.js:33`); dev warns if missing but still runs |
-| `CLOUDINARY_CLOUD_NAME` | For uploads | Cloudinary cloud name |
-| `CLOUDINARY_API_KEY` | For uploads | Cloudinary API key |
-| `CLOUDINARY_API_SECRET` | For uploads | Cloudinary API secret |
-| `ML_SERVICE_URL` | No | If set, `cvAdapter.js` delegates CV to this external service |
-| `REDIS_URL` | No | Redis URL for BullMQ (default `redis://localhost:6379`) |
-| `STRIPE_SECRET_KEY` | **Production yes** | Stripe secret key |
-| `STRIPE_WEBHOOK_SECRET` | **Production yes** | Stripe webhook signing secret |
-| `STRIPE_PUBLISHABLE_KEY` | No | Exposed to frontend for Stripe.js (not used server-side) |
-| `ADMIN_EMAIL` | No | Seeded admin email (`ADMIN_EMAIL` in `seed.js`) |
-| `ADMIN_PASSWORD` | No | Seeded admin password |
-
-> `validateEnv()` (`backend/src/config/validateEnv.js:19`) exits the process if `MONGODB_URI`/`JWT_SECRET` are missing, and in `production` also requires `STRIPE_SECRET_KEY`/`STRIPE_WEBHOOK_SECRET`/`CLIENT_URL`.
-
-### Frontend (`frontend/.env`)
-
-Create `frontend/.env` from `frontend/.env.example`:
+### ML Service (`ml-service/.env`)
 
 ```env
-VITE_API_URL=http://localhost:5000
-VITE_SOCKET_URL=http://localhost:5000
+CLIP_MODEL_NAME=ViT-B-32
+CLIP_PRETRAINED=laion2b_s34b_b79k
+ML_PIPELINE_V2=0          # 0=legacy | shadow | 1=v2
+FRAUD_THRESHOLD_HIGH=70
+FRAUD_THRESHOLD_MEDIUM=30
 ```
-
-| Variable | Required | Description |
-|---|---|---|
-| `VITE_API_URL` | Yes | Backend REST base URL used by `src/services/api.js` |
-| `VITE_SOCKET_URL` | Yes | Socket.io server URL used by `src/contexts/SocketContext.jsx` |
-
-In **dev**, Vite also proxies `/api` and `/socket.io` to `127.0.0.1:5000` (`frontend/vite.config.js:16`), so these can both point at `http://localhost:5000`.
 
 ---
 
-## Running the Application
+## 14. Local Development Setup
 
-### Backend
+### Prerequisites
+
+- Node.js 20+
+- Python 3.11+
+- MongoDB 6.0 (local install or MongoDB Atlas)
+- Redis 7 (optional — queues disabled if not running)
+
+### 1. Clone & Install Dependencies
 
 ```bash
-cd backend
-npm run dev      # portGuard + nodemon src/server.js  → http://localhost:5000
-# or
-npm start        # node src/server.js (production)
+git clone <repo-url>
+cd Resell
+
+# Install root dependencies
+npm install
+
+# Install backend dependencies
+cd backend && npm install && cd ..
+
+# Install frontend dependencies
+cd frontend && npm install && cd ..
+
+# Install ML service dependencies
+cd ml-service
+python -m venv .venv
+
+# Activate virtual environment
+.venv\Scripts\activate      # Windows
+source .venv/bin/activate   # macOS / Linux
+
+pip install -r requirements.txt
+cd ..
 ```
 
-Health check: `GET http://localhost:5000/health` → `{ status: "ok", timestamp }` (`backend/src/server.js:104`).
-
-### Frontend
+### 2. Configure Environment
 
 ```bash
+cp .env.example backend/.env
+# Open backend/.env and fill in your values
+```
+
+Minimum required variables for local dev:
+- `MONGODB_URI` (local MongoDB)
+- `JWT_SECRET` (any 32+ char string)
+- `CLOUDINARY_*` (for image upload)
+
+### 3. Start Development Servers
+
+```bash
+# Terminal 1 — Backend API (port 5000)
+cd backend
+npm run dev
+
+# Terminal 2 — Frontend (port 3000)
 cd frontend
-npm run dev      # vite  → http://localhost:3000  (proxies /api → :5000)
-npm run build    # vite build → frontend/dist
-npm run preview  # preview production build
+npm run dev
+
+# Terminal 3 — ML Service (port 8000, optional)
+cd ml-service
+.venv\Scripts\activate
+uvicorn main:app --reload --port 8000
 ```
 
-### Background Workers (optional but recommended)
+### 4. Access the Application
 
-Image uploads and price refinement require workers. Run each in its own terminal:
+| Service | URL | Notes |
+|---|---|---|
+| Frontend | http://localhost:3000 | React app |
+| Backend API | http://localhost:5000 | REST API |
+| ML Service | http://localhost:8000 | Python FastAPI |
+| ML API Docs | http://localhost:8000/docs | Swagger UI |
+| ML Health | http://localhost:8000/health | Health check |
+| Backend Health | http://localhost:5000/health | Health check |
 
-```bash
-cd backend
-npm run worker        # node src/workers/imageProcessor.js
-npm run worker:price  # node src/workers/priceAnalyzer.js
-```
-
-Without workers, products can be created but Cloudinary uploads and AI enrichment will not complete. `registerSweepJob()` is also started automatically by the server (`backend/src/server.js:171`).
-
-### Seed Demo Data (optional)
-
-```bash
-cd backend
-npm run seed     # node src/utils/seed.js  (creates admin + sample categories/products)
-```
-
-### URLs (defaults)
-
-| Service | URL |
-|---|---|
-| Frontend (Vite dev) | http://localhost:3000 |
-| Backend API | http://localhost:5000 |
-| Backend health | http://localhost:5000/health |
-| API base | http://localhost:5000/api |
-| Socket.io | http://localhost:5000 (same origin) |
-| Optional ML service | http://localhost:8000 (only if `ML_SERVICE_URL` set) |
+> **Graceful degradation:** The app works without Redis (queues disabled) and without the ML service (falls back to heuristic-only analysis). Only Cloudinary is required for image functionality.
 
 ---
 
-## Usage
+## 15. Docker / Production Deployment
 
-### 1. Create an Account
+```bash
+# Fill in production values
+cp .env.example .env
+# Edit .env
 
-1. Open `http://localhost:3000` → **Register**.
-2. Enter name, email, password (≥6 chars), optional role (`buyer`/`seller`) and location.
-3. Submit — you are logged in via httpOnly cookies + Bearer token and redirected to the marketplace.
-4. Existing users: **Login** with email/password. Use **Profile** to update bio/phone/avatar/location or change password.
+# Build and start all services
+docker compose up --build -d
 
-### 2. List a Product
+# Monitor startup
+docker compose ps
+docker compose logs -f backend
 
-1. Click **Sell** (requires login).
-2. Fill title, description, category, price, optional original price, brand/model, condition, years used, specifications, and location (city/state/country).
-3. Upload 1–8 images (image/*, ≤10 MB each). Images are validated by `multer` (`backend/src/middleware/upload.js:6`) and optionally via `POST /api/products/upload-images`.
-4. Submit — `POST /api/products` validates with `createProductValidation` (`backend/src/middleware/validate.js:28`), enforces `productCreateLimiter` (20/hour, `backend/src/middleware/rateLimiters.js:6`), and queues AI analysis:
-   - `imageHash` → `aiAnalysis.imageHashes`
-   - `computerVision` → `conditionScore`/`damageScore`
-   - `imageClassifier` → `classification.predictedCategory`
-   - `fraudDetection` → `riskAssessment`
-   - `priceRecommendation` → `priceRecommendation` (refined by `priceAnalyzer` worker)
-5. View your listings at **My Products** (`GET /api/products/mine`).
+# Verify health
+curl http://localhost:5000/health
+curl http://localhost:8000/health
+```
 
-### 3. Search & Browse
+### Services
 
-- **Marketplace** page (`GET /api/products`) supports query params validated by `productQueryValidation`:
-  - `q` — full-text search (title/description/brand/model)
-  - `category` — Category ObjectId
-  - `minPrice` / `maxPrice`
-  - `city`, `condition`, `brand`
-  - `sort` (e.g. `price`, `-createdAt`), `page`, `limit`
-- Filter chips, price slider, and category nav update the query string.
-- Click a card → **Product Detail** (`GET /api/products/:id`, increments `views`) shows gallery, `AIAnalysisPanel` (risk badge, condition, price suggestion), seller info, similar products (`GET /api/products/:id/similar`), and favorite toggle.
-- **Price suggestion** — `GET /api/products/suggest-price?category=&brand=&model=&condition=&yearsUsed=&originalPrice=` returns `{ recommendedPrice, minPrice, maxPrice, confidence, explanation, factors }` without creating a listing.
+| Container | Image | Port | Memory | Role |
+|---|---|---|---|---|
+| `resell-mongodb` | mongo:6.0 | 27017 | — | Primary database |
+| `resell-redis` | redis:7-alpine | 6379 | — | BullMQ + cache |
+| `resell-ml-service` | ./ml-service | 8000 | 2 GB limit | CLIP + LightGBM models |
+| `resell-backend` | ./backend | 5000 | — | Express API + Socket.IO |
+| `resell-worker-image` | ./backend | — | — | Image processing worker |
+| `resell-worker-price` | ./backend | — | — | Price analysis worker |
 
-### 4. Messaging
-
-- On a product, click **Chat with Seller** → `POST /api/chat/conversations` (`recipientId` + optional `productId`) creates or returns a conversation.
-- **Chat** page lists conversations (`GET /api/chat/conversations`) and messages (`GET /api/chat/conversations/:id/messages`).
-- Send via REST (`POST /api/chat/messages`, rate-limited 60/min) or over Socket.io (`chat:send` event). Real-time delivery, typing indicators, and read receipts are handled by `SocketContext.jsx`.
-- Mark read: `POST /api/chat/conversations/:id/read`.
-
-### 5. Buying
-
-- **Favorites** — heart icon toggles `POST /api/favorites/:productId` / `DELETE`.
-- **Offers** — make an offer on a product (`POST /api/offers`), seller sees it under **Received Offers**, can accept/reject/counter.
-- **Checkout** — **Checkout** page collects delivery address, then `POST /api/checkout/session` creates a Stripe Checkout Session (requires `STRIPE_SECRET_KEY`). Redirect to Stripe, then back to **Order Success** / **Order Cancelled**. Webhook at `POST /api/checkout/webhook` finalizes the order.
-- **Orders** — **Orders** (buyer) and **Selling** (seller) list orders; seller can ship/deliver; buyer can cancel (`PATCH /api/orders/:id/ship|deliver`, `POST /api/orders/:id/cancel`).
-
-### 6. Admin
-
-Login as `admin` role → **Admin** nav appears:
-- **Dashboard** (`GET /api/admin/stats`) — counts, recent activity.
-- **Analytics** (`GET /api/admin/analytics`) — trends.
-- **Users** — list/update/delete (`GET/PUT/DELETE /api/admin/users`).
-- **Products** — moderate (`PUT /api/admin/products/:id` → `active`/`rejected`/`removed`).
-- **Reports** — review user reports (`GET /api/reports`, `PUT /api/reports/:id`).
+The ML service requires **2 GB RAM** in production (needed for CLIP ViT-B/32 model weights loaded into memory). Workers are configured with `restart: unless-stopped` for reliability.
 
 ---
 
-## API Documentation
+## 16. API Reference
 
-Base URL: `http://localhost:5000` · Prefix: `/api` · Health: `GET /health` (no auth).
+### Authentication
 
-Auth: `Authorization: Bearer <jwt>` **or** httpOnly cookie `access_token` (`backend/src/middleware/auth.js:9`). `optionalAuth` allows anonymous browsing but enriches responses when a token is present. Admin routes additionally require `authorize('admin')`.
+All protected routes require a valid JWT passed as:
+- `Authorization: Bearer <token>` header, **or**
+- `token` httpOnly cookie (set automatically on login for browser clients)
 
-Global rate limiting: `500 req / 15 min` on `/api` (`backend/src/server.js:89`). Auth endpoints: `20 / 15 min`. Product creation: `20 / hour`. Chat messages: `60 / min`.
+### Key Request/Response Examples
 
-### Authentication — `/api/auth` (`backend/src/routes/authRoutes.js:20`)
-
-| Method | Endpoint | Auth | Description |
-|---|---|---|---|
-| POST | `/api/auth/register` | No | Register (name, email, password, role, location) |
-| POST | `/api/auth/login` | No | Login (email, password) → sets cookies + returns tokens |
-| POST | `/api/auth/logout` | Yes | Logout (blacklists jti, clears cookies) |
-| POST | `/api/auth/refresh` | No (refresh cookie) | Refresh access token |
-| GET | `/api/auth/me` | Yes | Current user profile |
-| PUT | `/api/auth/profile` | Yes | Update name/bio/phone/location/avatar |
-| PUT | `/api/auth/password` | Yes | Change password (currentPassword, newPassword) |
-
-**Example — Register**
+#### Create a Listing
 
 ```http
-POST /api/auth/register
-Content-Type: application/json
+POST /api/products
+Content-Type: multipart/form-data
+Authorization: Bearer <token>
 
-{
-  "name": "Ava Smith",
-  "email": "ava@example.com",
-  "password": "s3curePass!",
-  "role": "seller",
-  "location": "Berlin, Germany"
-}
+title: "iPhone 15 Pro Max 256GB Natural Titanium"
+price: 85000
+originalPrice: 134900
+condition: good
+yearsUsed: 0.5
+description: "Purchased 6 months ago, excellent condition..."
+category: <categoryObjectId>
+images: [file1.jpg, file2.jpg, file3.jpg]
+serialNumber: "DNPXXXXXXXX"    # optional but improves trust score
 ```
 
+Response:
 ```json
 {
   "success": true,
-  "data": {
-    "user": { "_id": "...", "name": "Ava Smith", "email": "ava@example.com", "role": "seller" },
-    "accessToken": "eyJ...",
-    "refreshToken": "eyJ..."
+  "product": {
+    "_id": "6abb5b96613ea3c775700131",
+    "title": "iPhone 15 Pro Max 256GB Natural Titanium",
+    "price": 85000,
+    "status": "active",
+    "aiAnalysis": {
+      "riskScore": 5,
+      "riskLevel": "low",
+      "riskFactors": [],
+      "conditionScore": 88,
+      "conditionLabel": "like-new",
+      "damageScore": 12,
+      "damageLevel": "low",
+      "suggestedCategory": "Electronics",
+      "categoryConfidence": 0.82
+    },
+    "priceRecommendation": {
+      "recommendedPrice": 79500,
+      "minPrice": 67575,
+      "maxPrice": 91425,
+      "confidence": 0.75,
+      "explanation": "Based on depreciation model adjusted by condition..."
+    }
   }
 }
 ```
 
-### Products — `/api/products` (`backend/src/routes/productRoutes.js:25`)
-
-| Method | Endpoint | Auth | Description |
-|---|---|---|---|
-| GET | `/api/products` | Optional | List/search/filter/sort/paginate products |
-| GET | `/api/products/suggest-price` | Optional | Price recommendation (query: category, brand, model, condition, yearsUsed, originalPrice) |
-| GET | `/api/products/brands` | No | Distinct brands |
-| GET | `/api/products/mine` | Yes | Current user's listings |
-| GET | `/api/products/:id` | Optional | Product detail (increments views) |
-| GET | `/api/products/:id/similar` | Optional | Similar products |
-| POST | `/api/products/upload-images` | Yes | Upload 1–8 images (multipart `images`) → Cloudinary URLs + hashes |
-| POST | `/api/products` | Yes | Create listing (20/hour limit) |
-| PUT | `/api/products/:id` | Yes (owner) | Update listing |
-| DELETE | `/api/products/:id` | Yes (owner) | Delete listing |
-| PATCH | `/api/products/:id/sold` | Yes (owner) | Mark as sold |
-
-**Example — Create listing**
+#### Get Seller Trust Score
 
 ```http
-POST /api/products
-Authorization: Bearer <token>
-Content-Type: application/json
+GET /api/sellers/:id/trust
+```
 
+Response:
+```json
 {
-  "title": "iPhone 13 — 128GB, Good Condition",
-  "description": "Lightly used, battery 88%, no scratches on screen.",
-  "price": 420,
-  "originalPrice": 799,
-  "category": "65f...",
-  "brand": "Apple",
-  "model": "iPhone 13",
-  "condition": "good",
-  "yearsUsed": 1,
-  "specifications": [{ "key": "Storage", "value": "128GB" }],
-  "location": { "city": "Berlin", "country": "Germany" },
-  "images": [{ "url": "https://res.cloudinary.com/.../img.jpg", "publicId": "resell/abc123" }]
+  "score": 74,
+  "level": "trusted",
+  "breakdown": {
+    "accountAge": { "score": 12, "max": 15, "days": 290 },
+    "sales": { "score": 18, "max": 20, "count": 47 },
+    "rating": { "score": 22, "max": 25, "average": 4.4, "count": 32 },
+    "responseTime": { "score": 10, "max": 15, "avgMinutes": 30 },
+    "complaints": { "score": 12, "max": 15, "complaints": 1 },
+    "listingQuality": { "score": 7, "max": 10, "listings": 63 }
+  }
 }
 ```
 
-### Categories — `/api/categories` (`backend/src/routes/categoryRoutes.js:17`)
+#### ML Service — Fraud Check
 
-| Method | Endpoint | Auth | Description |
-|---|---|---|---|
-| GET | `/api/categories` | No | List categories |
-| GET | `/api/categories/stats` | No | Category stats (counts) |
-| GET | `/api/categories/:slug` | No | Category by slug |
-| POST | `/api/categories` | Admin | Create category |
-| PUT | `/api/categories/:id` | Admin | Update category |
-| DELETE | `/api/categories/:id` | Admin | Delete category |
+```http
+POST http://localhost:8000/fraud-check
+Content-Type: application/json
 
-### Favorites — `/api/favorites` (`backend/src/routes/favoriteRoutes.js:12`)
-
-| Method | Endpoint | Auth | Description |
-|---|---|---|---|
-| GET | `/api/favorites` | Yes | List favorites |
-| GET | `/api/favorites/:productId/check` | Optional | Check if favorited |
-| POST | `/api/favorites/:productId` | Yes | Add favorite |
-| DELETE | `/api/favorites/:productId` | Yes | Remove favorite |
-
-### Chat — `/api/chat` (`backend/src/routes/chatRoutes.js:20`) + Socket.io
-
-| Method | Endpoint | Auth | Description |
-|---|---|---|---|
-| POST | `/api/chat/conversations` | Yes | Get or create conversation (recipientId, productId) |
-| GET | `/api/chat/conversations` | Yes | List conversations |
-| GET | `/api/chat/conversations/:id/messages` | Yes | List messages (paginated) |
-| POST | `/api/chat/messages` | Yes (60/min) | Send message (conversationId, content, attachments) |
-| POST | `/api/chat/conversations/:id/read` | Yes | Mark conversation as read |
-
-**Socket.io events** (`backend/src/sockets/index.js:7`):
-
-| Event | Direction | Payload | Description |
-|---|---|---|---|
-| `user:status` | Server → all | `{ userId, online }` | Presence |
-| `conversation:join` | Client → server | `conversationId` | Join room |
-| `conversation:leave` | Client → server | `conversationId` | Leave room |
-| `chat:send` | Client → server | `{ conversationId, text, attachments }` | Send message |
-| `chat:message` | Server → room | `Message` | New message broadcast |
-| `conversation:read` | Client → server | `conversationId` | Read receipt |
-| `typing:start` / `typing:stop` | Both | `{ conversationId, userId }` | Typing indicators |
-
-### Offers — `/api/offers` (`backend/src/routes/offerRoutes.js:18`)
-
-| Method | Endpoint | Auth | Description |
-|---|---|---|---|
-| POST | `/api/offers` | Yes | Create offer |
-| GET | `/api/offers` | Admin | List all offers |
-| GET | `/api/offers/mine` | Yes | Offers made by me |
-| GET | `/api/offers/received` | Yes | Offers on my products |
-| PUT | `/api/offers/:id` | Yes | Update offer |
-| POST | `/api/offers/:id/accept` | Yes | Accept offer |
-| POST | `/api/offers/:id/reject` | Yes | Reject offer |
-| POST | `/api/offers/:id/counter` | Yes | Counter-offer |
-
-### Orders — `/api/orders` (`backend/src/routes/orderRoutes.js:15`)
-
-| Method | Endpoint | Auth | Description |
-|---|---|---|---|
-| GET | `/api/orders/mine` | Yes | Orders where I am buyer |
-| GET | `/api/orders/selling` | Yes | Orders where I am seller |
-| GET | `/api/orders/:id` | Yes | Order detail |
-| PATCH | `/api/orders/:id/ship` | Yes (seller) | Mark shipped |
-| PATCH | `/api/orders/:id/deliver` | Yes (seller) | Mark delivered |
-| POST | `/api/orders/:id/cancel` | Yes | Cancel order |
-
-### Checkout — `/api/checkout` (`backend/src/routes/checkoutRoutes.js:9`)
-
-| Method | Endpoint | Auth | Description |
-|---|---|---|---|
-| POST | `/api/checkout/session` | Yes | Create Stripe Checkout Session |
-| POST | `/api/checkout/webhook` | No (Stripe sig) | Stripe webhook (raw body) |
-
-### Sellers — `/api/sellers` (`backend/src/routes/sellerRoutes.js:12`)
-
-| Method | Endpoint | Auth | Description |
-|---|---|---|---|
-| GET | `/api/sellers/:id` | No | Seller public profile |
-| GET | `/api/sellers/:id/trust` | No | Trust score (0–100 + breakdown) |
-| POST | `/api/sellers/:id/reviews` | Yes | Add review |
-| GET | `/api/sellers/:id/similar` | Optional | Similar products by seller |
-
-### Other
-
-| Method | Endpoint | Auth | Description |
-|---|---|---|---|
-| GET | `/api/exchange-rates/rates` | No | Current exchange rates |
-| POST | `/api/exchange-rates/convert` | No | Convert amount between currencies |
-| GET | `/api/notifications` | Yes | List notifications |
-| GET | `/api/notifications/unread` | Yes | Unread count |
-| PATCH | `/api/notifications/:id/read` | Yes | Mark one as read |
-| PATCH | `/api/notifications/read-all` | Yes | Mark all as read |
-| POST | `/api/reports` | Yes | Create report |
-| GET | `/api/reports` | Admin | List reports |
-| PUT | `/api/reports/:id` | Admin | Update report status |
-| GET | `/api/admin/stats` | Admin | Dashboard stats |
-| GET | `/api/admin/analytics` | Admin | Analytics |
-| GET | `/api/admin/users` | Admin | List users |
-| PUT | `/api/admin/users/:id` | Admin | Update user |
-| DELETE | `/api/admin/users/:id` | Admin | Delete user |
-| GET | `/api/admin/products` | Admin | List all products |
-| PUT | `/api/admin/products/:id` | Admin | Moderate product |
-
----
-
-## ML Models & Implementation
-
-All ML runs **in-process (Node.js)**. No Python service is required; an external service is only used if `ML_SERVICE_URL` is set.
-
-### Price Recommendation — `backend/src/services/priceRecommendation.js:1`
-
-**Purpose:** Help sellers set a fair, competitive resale price that reflects condition, age, brand, and market comparables.
-
-**Model:** Deterministic **heuristic engine** (not a trained regressor). Transparent, explainable, no training data required; refined asynchronously as more comparables appear (`priceSweep.js`, `priceAnalyzer` worker).
-
-**Inputs:** `category`, `brand`, `model`, `specifications`, `originalPrice`, `yearsUsed`, `condition` (`new`/`like-new`/`good`/`fair`/`poor`), CV `conditionScore`/`damageScore`, comparable active listings.
-
-**Outputs:** `recommendedPrice`, `minPrice`, `maxPrice`, `confidence` (0–1), `explanation`, `factors[]`, `source: 'heuristic' | 'ml-model'`.
-
-**Key constants** (`priceRecommendation.js:26`):
-- `CONDITION_FACTOR`: new 0.95, like-new 0.82, good 0.65, fair 0.45, poor 0.25
-- `ANNUAL_DEPRECIATION` by category: Fashion 30%, Books 25%, Mobile Phones 22%, Electronics 18%, etc.
-- `BRAND_PREMIUM`: Apple 1.10, Nike 1.05, Sony/Canon 1.03, etc.
-
-**Pipeline:**
-
-```text
-Product inputs + comparables
-        ↓
-Condition factor × Depreciation(years, category) × Brand premium
-        ↓
-Comparable median clamp (min/max)
-        ↓
-CV adjustment (conditionScore/damageScore)
-        ↓
-recommendedPrice + confidence + explanation
+{
+  "listing": {
+    "id": "6abb5b96613ea3c775700131",
+    "price": 5000,
+    "pHash": "a3f2c1d4e5b6f7a8",
+    "embedding": [0.123, -0.456, ...],
+    "accountAgeHours": 48,
+    "listingsPastHour": 3,
+    "category": "Electronics",
+    "title": "Brand new iPhone"
+  },
+  "candidateListings": [
+    {
+      "id": "other_listing_id",
+      "pHash": "a3f2c1d4e5b6f7a8",
+      "embedding": [0.124, -0.455, ...]
+    }
+  ],
+  "categoryMedianPrice": 45000
+}
 ```
 
-Exposed via `GET /api/products/suggest-price` and persisted to `Product.aiAnalysis.priceRecommendation`.
-
-### Image Classification — `backend/src/services/imageClassifier.js:1`
-
-**Purpose:** Automatically map product photos to ReSell's category taxonomy and flag miscategorized listings.
-
-**Model:** **MobileNet** (`@tensorflow-models/mobilenet` 2.1 + `@tensorflow/tfjs` 4) — ImageNet-pretrained, ~1000 classes. `sharp` decodes buffers to tensors. Falls back to keyword heuristics when TF.js is unavailable or confidence is low.
-
-**Mapping:** `IMAGENET_TO_CATEGORY` substring map (e.g. `cellular telephone` → `Electronics`, `handbag` → `Fashion`, `sofa` → `Home & Garden` — ~80+ mappings, `imageClassifier.js:36`).
-
-**Pipeline:**
-
-```text
-Image buffer → sharp → tensor → MobileNet.predict()
-        ↓
-Top-k ImageNet labels + confidences
-        ↓
-IMAGENET_TO_CATEGORY lookup → predictedCategory
-        ↓
-Persist to aiAnalysis.classification { predictedCategory, confidence }
-```
-
-### Duplicate Detection — `backend/src/services/imageHash.js:1`
-
-**Purpose:** Catch re-uploaded, cropped, or recompressed copies of existing listing images.
-
-**Model:** **64-bit perceptual hash (pHash) via 2D DCT** — resize to 32×32 grayscale → 2D DCT → top-left 8×8 low frequencies → median threshold → 64-bit hash (`imageHash.js:6`). Hamming distance comparison (`hammingDistance`).
-
-**Thresholds** (`imageHash.js:18`, `fraudDetection.js:24`):
-- `0–8` — very likely duplicate
-- `9–12` — possibly similar (flagged; `HASH_SIMILARITY_THRESHOLD = 12`)
-- `≥13` — different images (validated: same-category different products ≥30, margin 18)
-
-Uses `crypto` for hash encoding; `sharp` for resize/grayscale.
-
-**Pipeline:**
-
-```text
-Image → 32×32 grayscale → 2D DCT → 8×8 block → median → 64-bit hash
-        ↓
-Compare against up to 500 recent candidates in same category
-        ↓
-Hamming distance ≤ 12 → duplicateMatch { productId, similarity }
-        ↓
-Fraud risk +35 and moderation flag
-```
-
-CLI validator: `node backend/src/scripts/validate-duplicate-threshold.js`.
-
-### Fraud / Risk Detection — `backend/src/services/fraudDetection.js:1`
-
-**Purpose:** Surface suspicious listings before buyers transact.
-
-**Model:** **Rule-based risk scorer** (0–100 → `low`/`medium`/`high`), not a trained classifier. Rules are auditable and tuned against real photo fixtures.
-
-**Signals & weights:**
-- Duplicate image (Hamming ≤12) — +35
-- Suspicious pricing (far below comparable median)
-- Repeated descriptions (near-identical text)
-- Complaint/report history (`Report` collection)
-- New account + high-value listing
-- Seller trust signals (low trust → higher risk)
-
-Persisted to `Product.aiAnalysis.riskAssessment { riskScore, riskLevel, factors[], assessedAt }` and `isFlagged`/`flagReason`.
-
-### Seller Trust Score — `backend/src/services/trustScore.js:1`
-
-**Purpose:** Quantify seller reliability for buyers.
-
-**Model:** Weighted sum 0–100, level `unknown`/`low`/`medium`/`high`/`trusted`.
-
-| Component | Max | Source |
-|---|---|---|
-| Account age | 15 | `User.createdAt` |
-| Sales / activity | 20 | `Sale` + `Product` counts |
-| Average rating | 25 | `Review` avg |
-| Response time | 15 | `User.averageResponseMinutes` |
-| Complaint-free ratio | 15 | `Report` count vs sales |
-| Listing quality | 10 | `Product` completeness & CV scores |
-
-Served at `GET /api/sellers/:id/trust`.
-
-### Computer Vision (Quality & Damage) — `backend/src/services/computerVision.js:1`
-
-**Purpose:** Provide objective condition evidence from photos.
-
-**Model:** Heuristic pixel analysis via `sharp` (brightness, contrast, sharpness, edge/damage heuristics) + pluggable external model via `ML_SERVICE_URL` (`cvAdapter.js`). Gracefully degrades if `sharp` is unavailable.
-
-**Outputs:** `aiAnalysis.conditionScore` (0–100), `damageScore` (0–100), `damageDescription`, `width`/`height`/`format`/`brightness`/`contrast`/`sharpness`. Feeds price recommendation and fraud detection.
-
----
-
-## Security
-
-Implemented in `backend/src/server.js:41` and middleware:
-
-- **JWT** — `jsonwebtoken` with `jti` (per-token UUID), httpOnly cookies (`access_token` 1h, `refresh_token` 7d, `SameSite=Lax` or `None` + `Secure` in prod, `backend/src/utils/jwt.js:26`), token blacklisting on logout (`tokenBlacklist.js`), `protect` checks `isActive` and `suspendedUntil` (`middleware/auth.js:31`).
-- **Password hashing** — `bcryptjs` salt 12 (`User.js:54`), `select: false` on password field, `comparePassword` method.
-- **Authorization** — `authorize(...roles)` role guard; admin-only routes for categories/users/products/reports.
-- **Validation** — `express-validator` chains for every write endpoint (`middleware/validate.js:8`); `handleValidation` returns `400 VALIDATION_ERROR`.
-- **Helmet** — CSP, HSTS, `crossOriginResourcePolicy`, `referrerPolicy`, `permissionsPolicy` (`server.js:41`).
-- **CORS** — `origin: CLIENT_URL`, `credentials: true` for both Express and Socket.io.
-- **Rate limiting** — `express-rate-limit` globally (`500/15m`) plus stricter per-route: auth `20/15m`, products `20/h`, chat `60/m` (`server.js:89`, `rateLimiters.js:6`).
-- **NoSQL injection** — `express-mongo-sanitize` (`server.js:81`).
-- **Upload safety** — `multer` memory-only, `image/*` filter, 10 MB / 8 files cap (`middleware/upload.js:12`), Cloudinary transform + `resource_type: 'image'`.
-- **Audit logging** — `middleware/audit.js` + `AuditLog` model.
-- **Graceful shutdown** — `unhandledRejection`/`uncaughtException` handlers + `SIGTERM`/`SIGINT` close server + Mongoose (`server.js:192`).
-- **Stripe webhook** — raw body verification via `STRIPE_WEBHOOK_SECRET`.
-
----
-
-## Database
-
-**MongoDB via Mongoose** (`backend/src/config/db.js:3` → `mongoose.connect(MONGODB_URI)`).
-
-| Collection | Model file | Purpose | Key fields |
-|---|---|---|---|
-| **users** | `User.js` | Accounts | `name`, `email` (unique, indexed), `password` (hashed), `role` (buyer/seller/admin), `avatar`, `bio`, `phone`, `location`, `isActive`, `isVerified`, `lastSeen`, `averageResponseMinutes`, `complaints`, `suspendedUntil` |
-| **products** | `Product.js` | Listings | `title`, `description`, `price`, `originalPrice`, `currencyCode`, `category` (ref), `brand`, `model`, `condition`, `yearsUsed`, `specifications[]`, `location{city,state,country}`, `images[]{url,publicId,isPrimary}`, `seller` (ref User), `status` (active/sold/pending/rejected/removed), `isFlagged`, `views`, `favoritesCount`, `aiAnalysis{...}` |
-| **categories** | `Category.js` | Taxonomy | `name`, `slug` (unique), `description`, `icon`, `image`, `parent` (self-ref), `isActive` |
-| **conversations** | `Conversation.js` | Chat threads | `participants[]` (User refs), `product` (ref), `lastMessage` (ref), `unreadCounts` |
-| **messages** | `Message.js` | Chat messages | `conversation` (ref), `sender` (ref), `content`, `attachments[]`, `type`, `readBy[]{user, readAt}` |
-| **favorites** | `Favorite.js` | Wishlists | `user` (ref), `product` (ref), unique compound index |
-| **offers** | `Offer.js` | Price offers | `product` (ref), `buyer`/`seller` (refs), `amount`, `status` (pending/accepted/rejected/countered), `message` |
-| **sales / orders** | `Sale.js` / `Order` | Transactions | `product`, `buyer`, `seller`, `amount`, `status`, Stripe `sessionId`/`paymentIntent` |
-| **reviews** | `Review.js` | Ratings | `seller` (ref), `reviewer` (ref), `rating` (1–5), `comment`, `product` (ref) |
-| **reports** | `Report.js` | Moderation | `reporter` (ref), `target` (Product/User), `reason`, `description`, `status` |
-| **notifications** | `Notification.js` | In-app alerts | `user` (ref), `type`, `title`, `message`, `relatedId`, `isRead` |
-| **auditlogs** | `AuditLog.js` | Admin audit trail | `user`, `action`, `target`, `metadata`, `timestamp` |
-
-**Indexes:** text index on `Product.title/description/brand/model`; compound indexes on `status+createdAt`, `category+status`, `price`, `location.city`, `seller+status`, `aiAnalysis.riskAssessment.riskScore`; unique on `User.email`, `Favorite(user,product)`.
-
-**Relationships:**
-
-```text
-User ──┬── Product (seller)
-       ├── Conversation (participants)
-       ├── Message (sender)
-       ├── Favorite ── Product
-       ├── Offer (buyer/seller) ── Product
-       ├── Sale/Order (buyer/seller) ── Product
-       ├── Review (reviewer → seller)
-       ├── Report (reporter)
-       └── Notification
-
-Product ──┬── Category
-          ├── User (seller)
-          ├── Cloudinary images
-          └── aiAnalysis (classification, hashes, price, risk)
+Response:
+```json
+{
+  "fraudScore": 72,
+  "fraudProbability": 0.87,
+  "riskLevel": "high",
+  "isFlagged": true,
+  "factors": [
+    "Exact pHash duplicate detected (distance: 0)",
+    "Price 88% below category median (z-score: -4.2)",
+    "New account (48 hours) with 3 listings in last hour"
+  ],
+  "pipelineVersion": "v2"
+}
 ```
 
 ---
 
-## Future Enhancements
+## 17. Testing
 
-> Planned / proposed — not yet implemented.
+```bash
+# Run all backend tests
+cd backend
+npm test
 
-- **Personalized recommendations** — collaborative filtering / embeddings for "Recommended for you".
-- **Stronger fraud ML** — supervised classifier trained on labeled reports + image/text features.
-- **Improved image CV** — fine-tuned detector (e.g. YOLO/DETR) for product type + defect segmentation.
-- **Full-text search upgrade** — Atlas Search / Meilisearch with typo tolerance and faceting.
-- **Order tracking & shipping** — carrier integration, tracking numbers, delivery ETA.
-- **Push notifications** — Web Push / FCM for messages, offers, order updates.
-- **Seller analytics** — views → favorites → offers → sales funnel, price history charts.
-- **Wishlist sharing & social** — shareable collections, follow sellers.
-- **Mobile app** — React Native / PWA with offline support.
-- **CI/CD & observability** — GitHub Actions, Docker Compose prod, Sentry/metrics, automated E2E tests.
-- **i18n & accessibility** — multi-language, ARIA, keyboard navigation audits.
+# Run with coverage report
+npm run test:coverage
 
----
+# Run in watch mode (re-runs on file changes)
+npm run test:watch
+```
 
-## Contributing
+### Test Stack
 
-1. Fork the repository.
-2. Create a feature branch: `git checkout -b feat/your-feature`.
-3. Make changes and add tests (`backend`: `npm test`, `frontend`: `npm test`).
-4. Ensure lint/build pass: `cd frontend && npm run build`.
-5. Commit with clear messages.
-6. Push and open a Pull Request describing the change, testing, and screenshots if UI-related.
+| Tool | Purpose |
+|---|---|
+| Jest | Test runner + assertions |
+| mongodb-memory-server | In-memory MongoDB (no real DB required) |
+| supertest | HTTP integration testing against Express app |
 
-**Standards:**
-- Keep PRs focused and small.
-- Add/extend tests for new routes/services.
-- Do not commit `.env` files or secrets.
-- Follow existing code style (Express middleware pattern, Mongoose schemas, React hooks + Context).
+Test files are located in `backend/src/__tests__/`.
+
+> The backend automatically skips `dotenv` loading and env validation when `NODE_ENV=test`, allowing tests to inject their own environment variables without conflicting with a `.env` file.
 
 ---
 
 ## License
 
-No license file is currently present in the repository (`LICENSE` not found; no `license` field in `backend/package.json` or `frontend/package.json`). All rights are reserved by default. If you are the owner, add a `LICENSE` file (e.g. MIT) and set the `license` field in `package.json` to make the project reusable.
+This project is for educational and portfolio purposes.
 
 ---
 
-## Contact & Support
-
-No author/contact metadata is currently published in the repository (no `LICENSE` author, no `package.json` author field, no `CODEOWNERS`). Update this section with your details:
-
-```text
-Author: <your name>
-GitHub: https://github.com/<username>
-Repository: <repository-url>
-Issues: <repository-url>/issues
-```
-
-For bugs or feature requests, please open an issue in the repository.
-
+*Built with — Full-stack ML-powered marketplace combining Node.js, React, Python FastAPI, CLIP, LightGBM, TensorFlow.js, and MongoDB.*

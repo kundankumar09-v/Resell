@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
-import { Search, Eye, Flag, CheckCircle, XCircle } from 'lucide-react';
+import { Search, Eye, Flag, CheckCircle, XCircle, AlertTriangle, ShieldCheck, ShieldAlert, Sparkles } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { adminService } from '../services/services';
@@ -8,6 +8,7 @@ import AdminLayout from '../components/admin/AdminLayout';
 import Loader from '../components/ui/Loader';
 import { formatDate } from '../utils/format';
 import useFormatPrice from '../hooks/useFormatPrice';
+import { PRODUCT_FALLBACK_IMAGE, handleImageError } from '../utils/imageFallback';
 
 export default function AdminProducts() {
   const formatPrice = useFormatPrice('USD');
@@ -15,15 +16,20 @@ export default function AdminProducts() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
+  const [flagFilter, setFlagFilter] = useState('');
 
   useEffect(() => {
     load();
-  }, [statusFilter]);
+  }, [statusFilter, flagFilter]);
 
   const load = async () => {
     setLoading(true);
     try {
-      const r = await adminService.products({ q: search, status: statusFilter });
+      const r = await adminService.products({
+        q: search,
+        status: statusFilter,
+        flagged: flagFilter === 'flagged' ? 'true' : undefined,
+      });
       setItems(r.data.items);
     } finally {
       setLoading(false);
@@ -37,11 +43,20 @@ export default function AdminProducts() {
 
   const handleModerate = async (product, status) => {
     try {
-      await adminService.moderateProduct(product._id, { status });
-      setItems((prev) => prev.map((p) => (p._id === product._id ? { ...p, status } : p)));
-      toast.success(`Listing ${status}`);
+      await adminService.moderateProduct(product._id, {
+        status,
+        isFlagged: status === 'active' ? false : product.isFlagged,
+      });
+      setItems((prev) =>
+        prev.map((p) =>
+          p._id === product._id
+            ? { ...p, status, isFlagged: status === 'active' ? false : p.isFlagged }
+            : p
+        )
+      );
+      toast.success(`Listing ${status === 'active' ? 'approved & activated' : status}`);
     } catch {
-      toast.error('Failed to update');
+      toast.error('Failed to update status');
     }
   };
 
@@ -51,11 +66,40 @@ export default function AdminProducts() {
         isFlagged,
         flagReason: isFlagged ? 'Flagged by admin' : '',
       });
-      setItems((prev) => prev.map((p) => (p._id === product._id ? { ...p, isFlagged, flagReason: isFlagged ? 'Flagged by admin' : '' } : p)));
+      setItems((prev) =>
+        prev.map((p) =>
+          p._id === product._id
+            ? { ...p, isFlagged, flagReason: isFlagged ? 'Flagged by admin' : '' }
+            : p
+        )
+      );
       toast.success(isFlagged ? 'Listing flagged' : 'Flag removed');
     } catch {
       toast.error('Failed to update');
     }
+  };
+
+  const getRiskBadge = (score) => {
+    if (score === null || score === undefined) return null;
+    if (score >= 70) {
+      return (
+        <span className="badge bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300 font-mono text-xs flex items-center gap-1">
+          <ShieldAlert className="w-3 h-3" /> Risk: {score}/100
+        </span>
+      );
+    }
+    if (score >= 30) {
+      return (
+        <span className="badge bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 font-mono text-xs flex items-center gap-1">
+          <AlertTriangle className="w-3 h-3" /> Risk: {score}/100
+        </span>
+      );
+    }
+    return (
+      <span className="badge bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300 font-mono text-xs flex items-center gap-1">
+        <ShieldCheck className="w-3 h-3" /> Safe: {score}/100
+      </span>
+    );
   };
 
   return (
@@ -71,13 +115,26 @@ export default function AdminProducts() {
             className="input pl-9"
           />
         </form>
-        <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="input max-w-[180px]">
+        <select
+          value={statusFilter}
+          onChange={(e) => setStatusFilter(e.target.value)}
+          className="input max-w-[200px]"
+        >
           <option value="">All statuses</option>
+          <option value="pendingReview">⚠️ Needs AI Review</option>
           <option value="active">Active</option>
           <option value="sold">Sold</option>
           <option value="pending">Pending</option>
           <option value="rejected">Rejected</option>
           <option value="removed">Removed</option>
+        </select>
+        <select
+          value={flagFilter}
+          onChange={(e) => setFlagFilter(e.target.value)}
+          className="input max-w-[160px]"
+        >
+          <option value="">All flags</option>
+          <option value="flagged">Flagged only</option>
         </select>
       </div>
 
@@ -87,82 +144,115 @@ export default function AdminProducts() {
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full">
-              <thead className="bg-slate-50 border-b border-slate-200">
+              <thead className="bg-slate-50 dark:bg-slate-800/50 border-b border-slate-200 dark:border-slate-800">
                 <tr>
                   <th className="text-left p-3 font-medium text-sm">Listing</th>
                   <th className="text-left p-3 font-medium text-sm">Seller</th>
-                  <th className="text-left p-3 font-medium text-sm">Price</th>
-                  <th className="text-left p-3 font-medium text-sm">Status</th>
+                  <th className="text-left p-3 font-medium text-sm">Price / Est.</th>
+                  <th className="text-left p-3 font-medium text-sm">AI Risk & Status</th>
                   <th className="text-right p-3 font-medium text-sm">Actions</th>
                 </tr>
               </thead>
-              <tbody>
+              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                 {items.map((p) => (
-                  <tr key={p._id} className="border-b border-slate-100 hover:bg-slate-50">
+                  <tr key={p._id} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
                     <td className="p-3">
                       <div className="flex items-center gap-3">
                         <img
-                          src={p.images?.[0]?.url || 'https://via.placeholder.com/60'}
+                          src={p.images?.[0]?.url || PRODUCT_FALLBACK_IMAGE}
                           alt=""
-                          className="w-10 h-10 rounded-lg object-cover"
+                          className="w-12 h-12 rounded-lg object-cover flex-shrink-0"
+                          onError={(e) => handleImageError(e, PRODUCT_FALLBACK_IMAGE)}
                         />
-                        <div>
+                        <div className="min-w-0">
                           <Link
                             to={`/product/${p._id}`}
                             className="font-medium text-sm hover:text-brand-600 line-clamp-1"
                           >
                             {p.title}
                           </Link>
-                          <p className="text-xs text-slate-500">{p.category?.name}</p>
+                          <p className="text-xs text-slate-500">{p.category?.name || 'Uncategorized'}</p>
+                          {p.fraudReasons && p.fraudReasons.length > 0 && (
+                            <p className="text-[11px] text-amber-700 dark:text-amber-400 mt-1 line-clamp-2">
+                              🚩 {p.fraudReasons.join(' · ')}
+                            </p>
+                          )}
                         </div>
                       </div>
                     </td>
-                    <td className="p-3 text-sm">{p.seller?.name}</td>
-                    <td className="p-3 font-semibold text-sm">{formatPrice(p.price)}</td>
-                    <td className="p-3">
-                      <span className={`badge capitalize ${
-                        p.status === 'active' ? 'bg-emerald-100 text-emerald-700' :
-                        p.status === 'sold' ? 'bg-slate-100 text-slate-700' :
-                        p.status === 'pending' ? 'bg-amber-100 text-amber-700' :
-                        p.status === 'rejected' ? 'bg-red-100 text-red-700' :
-                        'bg-slate-100 text-slate-700'
-                      }`}>
-                        {p.status}
-                      </span>
-                      {p.isFlagged && (
-                        <span className="ml-2 badge bg-red-100 text-red-700">Flagged</span>
+                    <td className="p-3 text-sm">
+                      <div className="font-medium text-xs">{p.seller?.name || 'Unknown'}</div>
+                      <div className="text-[11px] text-slate-500">{p.seller?.email}</div>
+                    </td>
+                    <td className="p-3 text-sm">
+                      <div className="font-semibold">{formatPrice(p.price)}</div>
+                      {p.suggestedPrice && (
+                        <div className="text-[11px] text-brand-600 dark:text-brand-400 flex items-center gap-1">
+                          <Sparkles className="w-2.5 h-2.5" /> Est: {formatPrice(p.suggestedPrice)}
+                        </div>
                       )}
                     </td>
-                    <td className="p-3 text-right space-x-1">
-                      <Link
-                        to={`/product/${p._id}`}
-                        className="inline-flex p-1.5 rounded hover:bg-slate-100"
-                      >
-                        <Eye className="w-4 h-4" />
-                      </Link>
-                      {p.status === 'active' ? (
-                        <button
-                          onClick={() => handleModerate(p, 'rejected')}
-                          className="inline-flex p-1.5 rounded hover:bg-red-50 text-red-600"
+                    <td className="p-3">
+                      <div className="flex flex-col gap-1 items-start">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span
+                            className={`badge capitalize ${
+                              p.status === 'active'
+                                ? 'bg-emerald-100 text-emerald-700'
+                                : p.status === 'sold'
+                                ? 'bg-slate-100 text-slate-700'
+                                : p.status === 'pendingReview'
+                                ? 'bg-amber-100 text-amber-700 font-semibold'
+                                : p.status === 'rejected'
+                                ? 'bg-red-100 text-red-700'
+                                : 'bg-slate-100 text-slate-700'
+                            }`}
+                          >
+                            {p.status === 'pendingReview' ? 'Needs Review' : p.status}
+                          </span>
+                          {p.isFlagged && (
+                            <span className="badge bg-red-100 text-red-700 font-medium">Flagged</span>
+                          )}
+                        </div>
+                        {getRiskBadge(p.fraudScore)}
+                      </div>
+                    </td>
+                    <td className="p-3 text-right">
+                      <div className="flex items-center justify-end gap-1">
+                        <Link
+                          to={`/product/${p._id}`}
+                          title="View Listing"
+                          className="inline-flex p-1.5 rounded hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-400"
                         >
-                          <XCircle className="w-4 h-4" />
-                        </button>
-                      ) : (
+                          <Eye className="w-4 h-4" />
+                        </Link>
+                        {p.status !== 'active' ? (
+                          <button
+                            onClick={() => handleModerate(p, 'active')}
+                            title="Approve & Activate Listing"
+                            className="inline-flex p-1.5 rounded hover:bg-emerald-50 dark:hover:bg-emerald-950/40 text-emerald-600"
+                          >
+                            <CheckCircle className="w-4 h-4" />
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => handleModerate(p, 'rejected')}
+                            title="Reject Listing"
+                            className="inline-flex p-1.5 rounded hover:bg-red-50 dark:hover:bg-red-950/40 text-red-600"
+                          >
+                            <XCircle className="w-4 h-4" />
+                          </button>
+                        )}
                         <button
-                          onClick={() => handleModerate(p, 'active')}
-                          className="inline-flex p-1.5 rounded hover:bg-emerald-50 text-emerald-600"
+                          onClick={() => handleFlag(p, !p.isFlagged)}
+                          title={p.isFlagged ? 'Remove Flag' : 'Flag Listing'}
+                          className={`inline-flex p-1.5 rounded hover:bg-amber-50 dark:hover:bg-amber-950/40 ${
+                            p.isFlagged ? 'text-amber-600' : 'text-slate-400'
+                          }`}
                         >
-                          <CheckCircle className="w-4 h-4" />
+                          <Flag className="w-4 h-4" />
                         </button>
-                      )}
-                      <button
-                        onClick={() => handleFlag(p, !p.isFlagged)}
-                        className={`inline-flex p-1.5 rounded hover:bg-amber-50 ${
-                          p.isFlagged ? 'text-amber-600' : 'text-slate-400'
-                        }`}
-                      >
-                        <Flag className="w-4 h-4" />
-                      </button>
+                      </div>
                     </td>
                   </tr>
                 ))}

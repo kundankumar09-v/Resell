@@ -5,6 +5,7 @@ import { useState, useEffect } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import { favoriteService } from '../../services/services';
 import { getConditionLabel, getConditionColor, cn } from '../../utils/format';
+import { getProductImageUrl, handleImageError, PRODUCT_FALLBACK_IMAGE } from '../../utils/imageFallback';
 import Price from '../ui/Price';
 import toast from 'react-hot-toast';
 import { TiltCard } from '../ui/TiltCard';
@@ -13,7 +14,6 @@ export default function ProductCard({ product, index = 0 }) {
   const { user } = useAuth();
   const [favorited, setFavorited] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [imageError, setImageError] = useState(false);
 
   useEffect(() => {
     if (user && product?._id) {
@@ -46,7 +46,7 @@ export default function ProductCard({ product, index = 0 }) {
     }
   };
 
-  const mainImage = product.images?.[0]?.url || 'https://via.placeholder.com/600x600?text=No+Image';
+  const mainImage = getProductImageUrl(product);
   const sellerName = product.seller?.name || 'Seller';
   const conditionClass = getConditionColor(product.condition);
 
@@ -64,12 +64,7 @@ export default function ProductCard({ product, index = 0 }) {
               alt={product.title}
               loading="lazy"
               className="w-full h-full object-cover"
-              onError={(e) => {
-                if (!imageError) {
-                  setImageError(true);
-                  e.target.src = 'https://via.placeholder.com/600x600?text=No+Image';
-                }
-              }}
+              onError={(e) => handleImageError(e, PRODUCT_FALLBACK_IMAGE)}
               initial={{ scale: 1.05 }}
               animate={{ scale: 1 }}
               transition={{ duration: 0.8, ease: 'easeOut' }}
@@ -151,6 +146,20 @@ export default function ProductCard({ product, index = 0 }) {
                 className="absolute inset-0 bg-slate-900/70 grid place-items-center"
               >
                 <span className="badge bg-white text-slate-900 text-sm font-bold px-4 py-2">SOLD</span>
+              </motion.div>
+            )}
+
+            {/* Pending Review / Flagged badge */}
+            {(product.status === 'pendingReview' || product.status === 'flagged' || product.isFlagged) && product.status !== 'sold' && (
+              <motion.div
+                initial={{ opacity: 0, scale: 0.9 }}
+                animate={{ opacity: 1, scale: 1 }}
+                className="absolute inset-0 bg-slate-900/60 backdrop-blur-xs grid place-items-center p-3 text-center"
+              >
+                <div className="bg-amber-500/90 text-white rounded-xl px-3 py-1.5 text-xs font-semibold shadow-lg backdrop-blur-md flex items-center gap-1.5">
+                  <ShieldCheck className="w-3.5 h-3.5" />
+                  <span>Under AI Moderation Review</span>
+                </div>
               </motion.div>
             )}
           </div>

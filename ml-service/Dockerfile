@@ -1,31 +1,34 @@
-# ML Service Dockerfile
-FROM python:3.9-slim
+# ReSell ML Microservice Dockerfile (FastAPI + CLIP + LightGBM)
+FROM python:3.10-slim
 
 WORKDIR /app
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
+# Install OS libraries for image processing and network healthcheck
+RUN apt-get update && apt-get install -y --no-install-recommends \
     libglib2.0-0 \
     libsm6 \
     libxext6 \
     libxrender-dev \
-    libgl1-mesa-glx \
+    libgl1 \
     wget \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements and install Python dependencies
+# Install Python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy source code
-COPY app.py .
+# Copy source code and modules
+COPY . .
 
 # Create non-root user
 RUN useradd -m -u 1000 mluser && chown -R mluser:mluser /app
 USER mluser
 
-# Expose port
-EXPOSE 5000
+# Expose FastAPI service port (default 8000)
+EXPOSE 8000
 
-# Run with gunicorn (single worker for memory efficiency)
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "1", "--threads", "1", "--timeout", "60", "app:app"]
+ENV PORT=8000
+ENV PYTHONUNBUFFERED=1
+
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]

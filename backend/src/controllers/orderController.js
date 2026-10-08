@@ -181,6 +181,16 @@ const cancelOrder = async (req, res, next) => {
       throw new AppError(`Cannot cancel order in ${sale.status} status`, 400, 'INVALID_TRANSITION');
     }
 
+    // Provenance: ownership reverts to the seller on cancellation/refund
+    // and the product identity becomes active again (best-effort).
+    await recordSaleProvenance({
+      productId: sale.product ? sale.product.toString() : sale.product,
+      sellerId: sale.seller.toString(),
+      buyerId: sale.buyer.toString(),
+      transactionId: sale.stripePaymentIntentId,
+      eventType: 'sale_cancelled',
+    });
+
     const populated = await Sale.findById(sale._id)
       .populate('product', 'title images price')
       .populate('buyer', 'name avatar')

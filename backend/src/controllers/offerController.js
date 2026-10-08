@@ -5,7 +5,7 @@ const { notify } = require('../services/notificationService');
 
 const createOffer = async (req, res, next) => {
   try {
-    const { productId, amount, message, currencyCode } = req.body;
+    const { productId, amount, message } = req.body;
 
     const product = await Product.findById(productId);
     if (!product) throw new AppError('Product not found', 404, 'NOT_FOUND');
@@ -14,13 +14,16 @@ const createOffer = async (req, res, next) => {
       throw new AppError('Cannot make an offer on your own product', 400, 'INVALID_OFFER');
     }
 
+    // The offer currency is derived from the listing — a client-supplied
+    // currencyCode is never trusted. Otherwise a buyer could create an
+    // offer in a currency the checkout flow always rejects.
     const offer = await Offer.create({
       product: productId,
       buyer: req.user._id,
       seller: product.seller,
       amount,
       message: message || '',
-      currencyCode: currencyCode || 'USD',
+      currencyCode: product.currencyCode || 'USD',
       history: [{ status: 'pending', actor: req.user._id, at: new Date() }],
     });
 
@@ -211,8 +214,12 @@ const acceptOffer = async (req, res, next) => {
   try {
     const { id } = req.params;
 
+    // 'countered' is included because the model still allows the seller to
+    // accept the buyer's original offer after countering it — matching the
+    // dedicated endpoint to Offer.canTransition instead of 404ing on a valid
+    // current offer.
     const offer = await Offer.findOneAndUpdate(
-      { _id: id, seller: req.user._id, status: 'pending' },
+      { _id: id, seller: req.user._id, status: { $in: ['pending', 'countered'] } },
       {
         $set: { status: 'accepted' },
         $push: { history: { status: 'accepted', actor: req.user._id, at: new Date() } },
@@ -245,7 +252,7 @@ const rejectOffer = async (req, res, next) => {
     const { id } = req.params;
 
     const offer = await Offer.findOneAndUpdate(
-      { _id: id, seller: req.user._id, status: 'pending' },
+      { _id: id, seller: req.user._id, status: { $in: ['pending', 'countered'] } },
       {
         $set: { status: 'rejected' },
         $push: { history: { status: 'rejected', actor: req.user._id, at: new Date() } },

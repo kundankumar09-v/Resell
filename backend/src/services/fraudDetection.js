@@ -16,6 +16,13 @@ const Product = require('../models/Product');
 const User = require('../models/User');
 const Report = require('../models/Report');
 const { hammingDistance } = require('./imageHash');
+const {
+  buildProductFingerprint,
+  compareProductFingerprints,
+  MEDIUM_SIMILARITY_THRESHOLD,
+  STRONG_SIMILARITY_THRESHOLD,
+  MAX_CANDIDATES,
+} = require('./productFingerprint');
 
 const clamp = (val, min, max) => Math.max(min, Math.min(max, val));
 
@@ -43,12 +50,35 @@ const IDENTITY_SIGNAL_WEIGHTS = {
   POSSESSION_VERIFICATION_FAILED: { weight: 10, factor: 'Proof-of-possession verification failed (incorrect verification code)' },
 };
 
-const detectRisk = async ({ product, hashes = [], aiAnalysis = {}, identitySignals = [] }) => {
+// Visual product fingerprint (SCRUM-25): supporting signal ONLY. Similar
+// appearance or the same model is never fraud on its own — two sellers may
+// legitimately own the same model. High visual similarity is combined with
+// other evidence by the existing signal weights below: only when VERY
+// strong visual similarity coincides with conflicting evidence (ownership
+// mismatch, multiple active listings, ...) can total risk become high.
+// A visual match alone can never reach high risk or auto-flag a seller.
+const VISUAL_PRODUCT_SIMILARITY_SIGNAL = 'VISUAL_PRODUCT_SIMILARITY';
+
+// Weight tiers: MEDIUM threshold -> supporting signal (low weight);
+// STRONG threshold -> slightly higher weight, still supporting only.
+const visualSignalWeight = (similarity) => {
+  if (typeof similarity === 'number' && similarity >= STRONG_SIMILARITY_THRESHOLD) {
+    return { weight: 20, factor: 'Very strong visual product similarity to another listing — supporting evidence, combined with other risk factors' };
+  }
+  return { weight: 10, factor: 'Visual product similarity to another listing — supporting evidence only (same model is not fraud)' };
+};
+
+const detectRisk = async ({ product, hashes = [], aiAnalysis = {}, identitySignals = [], visualSignals = [], sameOwnerRelist = false }) => {
   const factors = [];
   let riskScore = 0;
 
+  const sellerIsSame = (a, b) => {
+    if (!a || !b) return false;
+    return a.toString() === b.toString();
+  };
+
   // 1. Duplicate image risk — similarity-based via perceptual hashing
-  if (hashes && hashes.length > 0) {
+  if (hashes && hashes.length > 0 && !sameOwnerRelist) {
     // Fetch candidate products in the same category (or all if no category)
     const candidateFilter = {
       _id: { $ne: product._id },
@@ -66,6 +96,13 @@ const detectRisk = async ({ product, hashes = [], aiAnalysis = {}, identitySigna
     for (const hash of hashes) {
       let duplicateFound = false;
       for (const candidate of candidates) {
+        if (
+          sameOwnerRelist &&
+          sellerIsSame(product.seller?._id || product.seller, candidate.seller)
+        ) {
+          continue;
+        }
+
         const candidateHashes = candidate.aiAnalysis?.imageHashes || [];
         for (const candidateHash of candidateHashes) {
           const distance = hammingDistance(hash, candidateHash);
@@ -106,16 +143,20 @@ const detectRisk = async ({ product, hashes = [], aiAnalysis = {}, identitySigna
     factors.push('High-value listing from new account');
   }
 
-  // 3. Repeated content (same description in many listings)
-  if (product.description) {
+  // 3. Repeated content (same description in multiple active listings)
+  // A sold-then-relisted product is a legitimate reuse of the same owner/
+  // listing identity, not a duplicate-description fraud pattern. Only count
+  // active listings for this supporting signal so same-owner relists stay low risk.
+  if (product.description && !sameOwnerRelist) {
     const dupCount = await Product.countDocuments({
       _id: { $ne: product._id },
+      status: 'active',
       seller: product.seller?._id || product.seller,
       description: product.description,
     });
     if (dupCount >= 2) {
       riskScore += 20;
-      factors.push(`Same description used in ${dupCount + 1} listings`);
+      factors.push(`Same description used in ${dupCount + 1} active listings`);
     }
   }
 
@@ -150,6 +191,21 @@ const detectRisk = async ({ product, hashes = [], aiAnalysis = {}, identitySigna
     factors.push(config.factor);
   }
 
+  // 7. Visual product fingerprint similarity (SCRUM-25 supporting signal).
+  //    Entries may be plain signal names or { signal, similarity } objects
+  //    carrying the measured cosine similarity. Thresholds are configurable
+  //    (productFingerprint.js); a visual match alone never reaches high risk.
+  for (const entry of visualSignals) {
+    const signal = typeof entry === 'string' ? entry : entry?.signal;
+    if (signal !== VISUAL_PRODUCT_SIMILARITY_SIGNAL || seenSignals.has(signal)) continue;
+    seenSignals.add(signal);
+    const { weight, factor } = visualSignalWeight(
+      typeof entry === 'object' ? entry.similarity : undefined
+    );
+    riskScore += weight;
+    factors.push(factor);
+  }
+
   riskScore = clamp(riskScore, 0, 100);
 
   let riskLevel = 'low';
@@ -163,4 +219,84 @@ const detectRisk = async ({ product, hashes = [], aiAnalysis = {}, identitySigna
   };
 };
 
-module.exports = { detectRisk };
+/**
+ * Visual product fingerprint assessment (SCRUM-25). Compares a listing's
+ * CNN fingerprint crosswise against other active/sold listings with CNN
+ * features (same category when available).
+ *
+ * Conservative, configurable thresholds (productFingerprint.js):
+ *   - below MEDIUM threshold:  no visual signal
+ *   - MEDIUM..STRONG:          supporting VISUAL_PRODUCT_SIMILARITY signal
+ *   - >= STRONG:               same signal at a slightly higher weight —
+ *                              still supporting only, never blocking
+ *
+ * CNN unavailability returns { available: false } and is never fraud.
+ * Best-effort: callers (the image worker) treat failures as warnings.
+ *
+ * @param {Object} params
+ * @param {string} params.productId        Listing to assess
+ * @param {string} [params.excludeProductId] Extra listing to exclude
+ * @returns {Object} { available, reason?, signal?, similarity?, similarTo? }
+ */
+const assessVisualSimilarity = async ({ productId, excludeProductId }) => {
+  const product = await Product.findById(productId)
+    .select('title category images.cnnFeatures')
+    .lean();
+  if (!product) {
+    return { available: false, reason: 'product_not_found' };
+  }
+
+  const fingerprint = buildProductFingerprint(product);
+  if (!fingerprint.available) {
+    return { available: false, reason: fingerprint.reason };
+  }
+
+  const candidateFilter = {
+    status: { $in: ['active', 'sold'] },
+  };
+  candidateFilter._id = { $nin: [product._id, ...(excludeProductId ? [excludeProductId] : [])] };
+  if (product.category) {
+    candidateFilter.category = product.category;
+  }
+
+  const candidates = await Product.find(candidateFilter)
+    .select('title category images.cnnFeatures')
+    .limit(MAX_CANDIDATES)
+    .lean();
+
+  let best = null;
+  for (const candidate of candidates) {
+    const candidateFingerprint = buildProductFingerprint(candidate);
+    const comparison = compareProductFingerprints(fingerprint, candidateFingerprint);
+    if (!comparison.available) continue;
+    if (!best || comparison.similarity > best.similarity) {
+      best = {
+        similarity: comparison.similarity,
+        aggregateSimilarity: comparison.aggregateSimilarity,
+        similarTo: candidate._id.toString(),
+        similarToTitle: candidate.title,
+      };
+    }
+  }
+
+  if (!best || best.similarity < MEDIUM_SIMILARITY_THRESHOLD) {
+    return { available: true, signal: null, similarity: best?.similarity ?? null };
+  }
+
+  const { weight, factor } = visualSignalWeight(best.similarity);
+  return {
+    available: true,
+    signal: VISUAL_PRODUCT_SIMILARITY_SIGNAL,
+    similarity: best.similarity,
+    similarTo: best.similarTo,
+    weight,
+    factor,
+  };
+};
+
+module.exports = {
+  detectRisk,
+  assessVisualSimilarity,
+  VISUAL_PRODUCT_SIMILARITY_SIGNAL,
+  VISUAL_SIGNAL_WEIGHTS: IDENTITY_SIGNAL_WEIGHTS,
+};

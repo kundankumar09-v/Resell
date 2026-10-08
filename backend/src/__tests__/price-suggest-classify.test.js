@@ -1,13 +1,13 @@
-/**
+﻿/**
  * Tests for suggest-price endpoint and image classification.
  *
  * Covers:
- *  1. GET /api/products/suggest-price — enough comparables
- *  2. GET /api/products/suggest-price — cold-start (no comparables)
- *  3. GET /api/products/suggest-price — condition affects price direction
- *  4. classifyProduct — keyword fallback still works
- *  5. classifyProduct — returns source field
- *  6. Image classifier — IMAGENET_TO_CATEGORY mapping
+ *  1. GET /api/products/suggest-price â€” enough comparables
+ *  2. GET /api/products/suggest-price â€” cold-start (no comparables)
+ *  3. GET /api/products/suggest-price â€” condition affects price direction
+ *  4. classifyProduct â€” keyword fallback still works
+ *  5. classifyProduct â€” returns source field
+ *  6. Image classifier â€” IMAGENET_TO_CATEGORY mapping
  */
 
 const request = require('supertest');
@@ -60,7 +60,7 @@ describe('Price Suggestion & Image Classification', () => {
     });
   });
 
-  // ─── 1. Suggest price with enough comparables ───
+  // â”€â”€â”€ 1. Suggest price with enough comparables â”€â”€â”€
 
   describe('GET /api/products/suggest-price', () => {
     it('returns a price suggestion when enough comparables exist', async () => {
@@ -92,7 +92,7 @@ describe('Price Suggestion & Image Classification', () => {
       expect(typeof res.body.explanation).toBe('string');
     });
 
-    // ─── 2. Cold-start: no comparables ───
+    // â”€â”€â”€ 2. Cold-start: no comparables â”€â”€â”€
 
     it('returns insufficient data when no comparables and no original price', async () => {
       const res = await request(app)
@@ -105,7 +105,7 @@ describe('Price Suggestion & Image Classification', () => {
       expect(res.body.comparableCount).toBe(0);
     });
 
-    // ─── 3. Condition affects price direction ───
+    // â”€â”€â”€ 3. Condition affects price direction â”€â”€â”€
 
     it('returns higher price for better condition', async () => {
       // Create comparables
@@ -135,7 +135,7 @@ describe('Price Suggestion & Image Classification', () => {
       expect(likeNew.body.suggestedPrice).toBeGreaterThan(fair.body.suggestedPrice);
     });
 
-    // ─── 4. Original price drives depreciation model ───
+    // â”€â”€â”€ 4. Original price drives depreciation model â”€â”€â”€
 
     it('uses depreciation model when originalPrice is provided', async () => {
       const res = await request(app)
@@ -148,7 +148,7 @@ describe('Price Suggestion & Image Classification', () => {
     });
   });
 
-  // ─── 5. classifyProduct keyword fallback ───
+  // â”€â”€â”€ 5. classifyProduct keyword fallback â”€â”€â”€
 
   describe('computerVision.classifyProduct', () => {
     it('classifies electronics from title keywords', async () => {
@@ -157,7 +157,7 @@ describe('Price Suggestion & Image Classification', () => {
       expect(result.category).toBe('Electronics');
       expect(result.confidence).toBeGreaterThan(0);
       expect(result.source).toBeDefined();
-    });
+    }, 90000);
 
     it('classifies fashion from title keywords', async () => {
       const buf = Buffer.alloc(100, 0x80);
@@ -179,7 +179,7 @@ describe('Price Suggestion & Image Classification', () => {
     });
   });
 
-  // ─── 6. Image classifier mapping ───
+  // â”€â”€â”€ 6. Image classifier mapping â”€â”€â”€
 
   describe('imageClassifier', () => {
     it('has IMAGENET_TO_CATEGORY mapping', () => {

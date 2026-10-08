@@ -18,10 +18,11 @@ const { detectRisk } = require('../services/fraudDetection');
 const {
   verifyOwnershipForListing,
   verifyPossession,
+  requestPossessionChallenge,
   recordSaleProvenance,
   SIGNALS,
 } = require('../services/identityVerification');
-const { isIdentifierEligible, createProvenanceEvent, verifyProvenanceChain } = require('../services/provenance');
+const { isIdentifierEligible, isIdentifierTypeValidForCategory, createProvenanceEvent, verifyProvenanceChain } = require('../services/provenance');
 const { findSimilar } = require('../services/similarProducts');
 const { imageProcessingQueue } = require('../queues');
 
@@ -128,9 +129,18 @@ const getProduct = async (req, res, next) => {
 
     if (!product) throw new AppError('Product not found', 404, 'NOT_FOUND');
 
+    const isOwner =
+      req.user && req.user._id.toString() === product.seller._id.toString();
+
     // Increment views (best-effort)
-    if (!req.user || req.user._id.toString() !== product.seller._id.toString()) {
+    if (!isOwner) {
       Product.updateOne({ _id: product._id }, { $inc: { views: 1 } }).catch(() => {});
+      // Internal fraud/moderation scores are never exposed to buyers or
+      // anonymous viewers — only the owner (and admins) see the listing's
+      // own risk assessment.
+      if (product.aiAnalysis && req.user?.role !== 'admin') {
+        product.aiAnalysis.riskAssessment = undefined;
+      }
     }
 
     res.json({ success: true, product });
@@ -164,16 +174,16 @@ const uploadImages = async (req, res, next) => {
     }
 
     // Phase 2: Check each hash against existing active/sold products.
-    // Scoped to same category when available, otherwise global.
-    // Limit to 500 candidates for performance.
+    // The check is deliberately GLOBAL, never scoped by a client-supplied
+    // category — the eventual listing's category is chosen later in
+    // POST /api/products, so trusting a category field here would let a
+    // seller scope the check away from the listing that holds the
+    // original image. Limited to 500 candidates for performance.
     for (const { hash } of fileHashes) {
       const candidateFilter = {
         status: { $in: ['active', 'sold'] },
         'aiAnalysis.imageHashes': { $exists: true, $ne: [] },
       };
-      if (req.body.category) {
-        candidateFilter.category = req.body.category;
-      }
 
       const candidates = await Product.find(candidateFilter)
         .select('title seller aiAnalysis.imageHashes')
@@ -198,8 +208,9 @@ const uploadImages = async (req, res, next) => {
     // Phase 3: All hashes are unique — proceed with Cloudinary upload + CV analysis.
     const results = [];
     for (const file of req.files) {
+      let uploaded = null;
       try {
-        const uploaded = await uploadToCloudinary(file.buffer, 'resell/products');
+        uploaded = await uploadToCloudinary(file.buffer, 'resell/products');
         const hash = fileHashes.find((fh) => fh.file === file)?.hash;
 
         // CV analysis
@@ -227,6 +238,11 @@ const uploadImages = async (req, res, next) => {
         });
       } catch (err) {
         console.error('[Upload] Image processing error:', err.message);
+        // If the file made it to Cloudinary but analysis failed, the client
+        // never received its URL — delete the asset so it is not orphaned.
+        if (uploaded?.publicId) {
+          await deleteFromCloudinary(uploaded.publicId).catch(() => {});
+        }
       }
     }
 
@@ -234,12 +250,24 @@ const uploadImages = async (req, res, next) => {
       throw new AppError('Failed to process images', 500, 'IMAGE_PROCESSING_FAILED');
     }
 
-    // Average CV scores across images
+    // Average CV scores across images. Unavailable analysis (null score)
+    // is skipped — a missing visual estimate is never fabricated as 0 or 75.
+    const conditionScores = results
+      .map((r) => r.analysis?.conditionScore)
+      .filter((s) => typeof s === 'number' && Number.isFinite(s));
+    const damageScores = results
+      .map((r) => r.analysis?.damageScore)
+      .filter((s) => typeof s === 'number' && Number.isFinite(s));
     const avgCondition =
-      results.reduce((s, r) => s + (r.analysis?.conditionScore || 0), 0) / results.length;
+      conditionScores.length > 0
+        ? conditionScores.reduce((s, v) => s + v, 0) / conditionScores.length
+        : null;
     const avgDamage =
-      results.reduce((s, r) => s + (r.analysis?.damageScore || 0), 0) / results.length;
+      damageScores.length > 0
+        ? damageScores.reduce((s, v) => s + v, 0) / damageScores.length
+        : null;
     const predictedCategory = results[0]?.analysis?.predictedCategory || 'Other';
+    const classificationConfidence = results[0]?.analysis?.classificationConfidence || 0;
 
     res.json({
       success: true,
@@ -251,10 +279,19 @@ const uploadImages = async (req, res, next) => {
         hash: r.hash,
       })),
       analysis: {
-        conditionScore: Math.round(avgCondition),
-        damageScore: Math.round(avgDamage),
+        conditionScore: avgCondition !== null ? Math.round(avgCondition) : null,
+        damageScore: avgDamage !== null ? Math.round(avgDamage) : null,
+        damageLevel:
+          avgDamage === null
+            ? null
+            : avgDamage >= 50
+            ? 'high'
+            : avgDamage >= 25
+            ? 'medium'
+            : 'low',
         predictedCategory,
-        classificationConfidence: results[0]?.analysis?.classificationConfidence || 0,
+        classificationConfidence,
+        visualAnalysisAvailable: avgCondition !== null || avgDamage !== null,
       },
     });
   } catch (err) {
@@ -292,17 +329,36 @@ const reverifyImageAnalysis = async (images = [], { title } = {}) => {
     return null;
   }
 
+  // Average only the images whose re-analysis produced real evidence —
+  // unavailable analysis (null scores) is never fabricated as a number.
+  const conditionScores = results
+    .map((r) => r.conditionScore)
+    .filter((s) => typeof s === 'number' && Number.isFinite(s));
+  const damageScores = results
+    .map((r) => r.damageScore)
+    .filter((s) => typeof s === 'number' && Number.isFinite(s));
+  if (conditionScores.length === 0 && damageScores.length === 0) {
+    return null;
+  }
+
   const avgCondition =
-    results.reduce((s, r) => s + r.conditionScore, 0) / results.length;
+    conditionScores.length > 0
+      ? conditionScores.reduce((s, v) => s + v, 0) / conditionScores.length
+      : null;
   const avgDamage =
-    results.reduce((s, r) => s + r.damageScore, 0) / results.length;
+    damageScores.length > 0
+      ? damageScores.reduce((s, v) => s + v, 0) / damageScores.length
+      : null;
   const classification = await computerVision.classifyProduct(null, { title });
 
   return {
-    conditionScore: Math.round(avgCondition),
-    damageScore: Math.round(avgDamage),
+    conditionScore: avgCondition !== null ? Math.round(avgCondition) : null,
+    damageScore: avgDamage !== null ? Math.round(avgDamage) : null,
+    damageLevel:
+      avgDamage === null ? null : avgDamage >= 50 ? 'high' : avgDamage >= 25 ? 'medium' : 'low',
     predictedCategory: classification.category,
     classificationConfidence: classification.confidence,
+    visualAnalysisAvailable: true,
   };
 };
 
@@ -327,12 +383,40 @@ const createProduct = async (req, res, next) => {
       proofImageUrl,
     } = req.body;
 
+    let normalizedIdentifier = typeof identifier === 'string' ? identifier.trim() : '';
+    let normalizedIdentifierType = typeof identifierType === 'string' ? identifierType.trim().toLowerCase() : '';
+
+    // Blank or partially supplied identifier metadata must never be coerced into
+    // a physical-product registration. Missing identifier data means the listing
+    // follows the visual-only possession flow, not an IMEI/serial/VIN flow.
+    if (!normalizedIdentifier || !normalizedIdentifierType) {
+      normalizedIdentifier = '';
+      normalizedIdentifierType = '';
+    }
+    const hasIdentifierInput = !!(normalizedIdentifier && normalizedIdentifierType);
+
     if (!title || !description || !price || !category) {
       throw new AppError('Title, description, price and category are required', 400);
     }
 
-    if (!images || !Array.isArray(images) || images.length === 0) {
-      throw new AppError('At least one image is required', 400);
+    // ── Multi-angle image requirement (server-validated) ────────────────
+    // Minimum 3 valid product images (recommended 4-6, maximum 8). The
+    // server — never the client — determines the final valid image count.
+    // Sellers are guided toward: front/main, back, side/detail and an
+    // optional condition/serial area (see SellProduct guidance).
+    if (!images || !Array.isArray(images) || images.length < 3) {
+      throw new AppError(
+        'At least 3 images are required: a front/main view, a back view and a side or detail view. Recommended: 4-6 images.',
+        400,
+        'TOO_FEW_IMAGES'
+      );
+    }
+    if (images.length > 8) {
+      throw new AppError(
+        'A listing can have at most 8 images. Please remove the extra images.',
+        400,
+        'TOO_MANY_IMAGES'
+      );
     }
 
     // ── Product identity verification (extension) ──────────────────────
@@ -340,14 +424,23 @@ const createProduct = async (req, res, next) => {
     // ownership. Existing fraud checks (pHash, MobileNet, trust) still run.
     let identityResult = null;
     let identityStatus = null;
-    const identifierProvided = !!(identifier && identifierType);
 
-    if (identifierProvided) {
+    if (hasIdentifierInput) {
       const eligible = await isIdentifierEligible(category);
       if (eligible) {
+        // Reject invalid identifier/category combinations (IMEI only for
+        // phone-like categories, VIN only for vehicle-like categories).
+        const typeValid = await isIdentifierTypeValidForCategory(category, normalizedIdentifierType);
+        if (!typeValid) {
+          throw new AppError(
+            `${normalizedIdentifierType.toUpperCase()} is not a valid identifier for this category. Use a serial number, or the identifier type appropriate for this product.`,
+            400,
+            'IDENTIFIER_TYPE_INVALID'
+          );
+        }
         identityResult = await verifyOwnershipForListing({
-          rawIdentifier: identifier,
-          identifierType,
+          rawIdentifier: normalizedIdentifier,
+          identifierType: normalizedIdentifierType,
           sellerId: req.user._id,
           proofImageUrl: proofImageUrl || undefined,
         });
@@ -382,8 +475,12 @@ const createProduct = async (req, res, next) => {
     }
 
     // Create product with minimal AI analysis (hashes from upload)
-    // Full AI analysis will be done in background job
-    const product = await Product.create({
+    // Full AI analysis will be done in background job. If the listing itself
+    // fails to persist, an identity registered during this request must not
+    // be orphaned — it is removed again (best-effort) before rethrowing.
+    let product;
+    try {
+      product = await Product.create({
       title,
       description,
       price,
@@ -427,6 +524,15 @@ const createProduct = async (req, res, next) => {
         lastAnalyzedAt: new Date(),
       },
     });
+    } catch (err) {
+      // A 'registered' identity created moments ago (before the listing
+      // existed) must not be orphaned when the listing itself fails to
+      // persist — remove it so the seller can retry cleanly.
+      if (identityResult?.outcome === 'registered' && identityResult.identity?._id) {
+        await ProductIdentity.deleteOne({ _id: identityResult.identity._id }).catch(() => {});
+      }
+      throw err;
+    }
 
     // Queue background job for full AI analysis
     await imageProcessingQueue.add('analyze-product', {
@@ -461,6 +567,22 @@ const createProduct = async (req, res, next) => {
           { $set: { productId: product._id } }
         ).catch(() => {});
         identityDoc.productId = product._id;
+      } else if (
+        (identityResult.outcome === 'relist' || identityResult.outcome === 'transferred') &&
+        identityDoc.productId
+      ) {
+        // Relist/transfer keeps the identity linked to its original
+        // registration — unless the originally registered product no longer
+        // exists (dangling ref from a failed creation or a deleted listing),
+        // in which case the new listing becomes the linked product.
+        const linkedExists = await Product.exists({ _id: identityDoc.productId });
+        if (!linkedExists) {
+          await ProductIdentity.updateOne(
+            { _id: identityDoc._id },
+            { $set: { productId: product._id } }
+          ).catch(() => {});
+          identityDoc.productId = product._id;
+        }
       }
       await createProvenanceEvent({
         productIdentityId: identityResult.identity._id,
@@ -477,6 +599,7 @@ const createProduct = async (req, res, next) => {
       hashes: product.aiAnalysis.imageHashes,
       aiAnalysis: product.aiAnalysis,
       identitySignals: identityResult?.signals || [],
+      sameOwnerRelist: identityResult?.outcome === 'relist',
     });
     product.aiAnalysis.riskAssessment = {
       riskScore: risk.riskScore,
@@ -526,9 +649,13 @@ const fetchImageBuffer = async (url) => {
 const cleanupUnreferencedImages = async (publicIds, productId) => {
   for (const publicId of publicIds) {
     try {
+      // 'removed' listings are soft-deleted — the document still exists but
+      // is no longer a real reference, so its assets can be cleaned up.
+      // Shared assets referenced by live listings are never destroyed.
       const referenced = await Product.exists({
         'images.publicId': publicId,
         _id: { $ne: productId },
+        status: { $ne: 'removed' },
       });
       if (!referenced) await deleteFromCloudinary(publicId);
     } catch (err) {
@@ -541,6 +668,12 @@ const updateProduct = async (req, res, next) => {
   try {
     const product = await Product.findById(req.params.id);
     if (!product) throw new AppError('Product not found', 404, 'NOT_FOUND');
+
+    // Capture the ORIGINAL category before the allowed-fields loop below
+    // mutates it — the edit-time duplicate check must be scoped to the
+    // category the listing actually lives in, not the one this request is
+    // moving it to.
+    const originalCategory = product.category?.toString() || null;
 
     if (
       product.seller.toString() !== req.user._id.toString() &&
@@ -609,7 +742,6 @@ const updateProduct = async (req, res, next) => {
     // ---- Edit-time image re-verification (same defenses as creation) ----
     // The product is NOT saved until every new image passes verification,
     // so a rejected edit can never leave a partially updated listing.
-    const category = req.body.category !== undefined ? req.body.category : product.category;
     const newPublicIds = [];
     const verified = [];
 
@@ -646,20 +778,32 @@ const updateProduct = async (req, res, next) => {
       }
 
       // Duplicate detection for NEW images — identical rules to the
-      // upload-time check: active/sold listings, scoped to the listing's
-      // category, hamming distance <= DUPLICATE_HASH_THRESHOLD. Both the
-      // normal and the mirrored hash are probed so a flipped copy of an
-      // existing image cannot slip through.
-      const candidateFilter = {
-        _id: { $ne: product._id },
-        status: { $in: ['active', 'sold'] },
-        'aiAnalysis.imageHashes': { $exists: true, $ne: [] },
-      };
-      if (category) candidateFilter.category = category;
+      // upload-time check: active/sold listings, hamming distance
+      // <= DUPLICATE_HASH_THRESHOLD. Both the normal and the mirrored
+      // hash are probed so a flipped copy of an existing image cannot
+      // slip through. The scope covers BOTH the listing's original
+      // category and any new category supplied in this request — a
+      // seller can never scope the check away from the listing that
+      // holds the original image by changing the category mid-edit.
+      const requestedCategory = req.body.category !== undefined ? req.body.category : null;
+      const scopeCategories = [
+        ...new Set(
+          [originalCategory, requestedCategory?.toString()].filter(Boolean)
+        ),
+      ];
 
-      const candidates = await Product.find(candidateFilter)
-        .select('title aiAnalysis.imageHashes')
-        .limit(500);
+      const candidates = [];
+      for (const scopeCategory of scopeCategories) {
+        const inScope = await Product.find({
+          _id: { $ne: product._id },
+          status: { $in: ['active', 'sold'] },
+          'aiAnalysis.imageHashes': { $exists: true, $ne: [] },
+          category: scopeCategory,
+        })
+          .select('title aiAnalysis.imageHashes')
+          .limit(500);
+        candidates.push(...inScope);
+      }
 
       for (const v of verified) {
         if (!v.isNew) continue;
@@ -677,9 +821,9 @@ const updateProduct = async (req, res, next) => {
                 );
               }
             }
-          }
         }
       }
+    }
     } catch (err) {
       // Verification failed — nothing was persisted. Clean up the newly
       // uploaded Cloudinary assets that belong to this rejected update.
@@ -785,8 +929,30 @@ const markAsSold = async (req, res, next) => {
     if (product.seller.toString() !== req.user._id.toString()) {
       throw new AppError('Not authorized', 403, 'FORBIDDEN');
     }
+
+    // Only active listings can be toggled sold (and sold listings relisted).
+    // This prevents a seller from lifting a moderation hold via a
+    // flagged -> sold -> active double-toggle, or from flipping a listing
+    // that is locked in 'pending' by an open checkout session.
+    if (product.status !== 'active' && product.status !== 'sold') {
+      throw new AppError(
+        `Cannot change sale status of a ${product.status} listing`,
+        409,
+        'INVALID_STATE'
+      );
+    }
     product.status = product.status === 'sold' ? 'active' : 'sold';
     await product.save();
+
+    // Relisting restores the identity registry status (sold -> active) so
+    // the identity matches the listing — otherwise the next edit/creation
+    // would see a 'sold' identity for an active listing. Best-effort.
+    if (product.status === 'active' && product.productIdentity) {
+      await ProductIdentity.updateOne(
+        { _id: product.productIdentity },
+        { $set: { status: 'active' } }
+      ).catch(() => {});
+    }
 
     // Provenance event for tracked identities (server-side, best-effort)
     if (product.status === 'sold') {
@@ -895,6 +1061,44 @@ const submitPossessionVerification = async (req, res, next) => {
   }
 };
 
+/**
+ * Request a possession-verification challenge (SCRUM-25, seller only).
+ * Issues a fresh short-lived code the seller must show beside the physical
+ * product in the proof photo. For listings without any identifier a
+ * 'visual' possession identity is registered lazily — no sensitive
+ * identifier required. The code is only ever returned to the current
+ * owner; client-provided "verified" flags are never trusted.
+ */
+const requestPossession = async (req, res, next) => {
+  try {
+    const result = await requestPossessionChallenge({
+      productId: req.params.id,
+      sellerId: req.user._id,
+    });
+
+    if (result.alreadyVerified) {
+      return res.json({
+        success: true,
+        alreadyVerified: true,
+        possessionStatus: 'verified',
+      });
+    }
+
+    res.json({
+      success: true,
+      ...(result.created ? { created: true } : {}),
+      possessionStatus: result.identity.verification?.possessionStatus || 'unverified',
+      possession: {
+        verificationCode: result.identity.verification?.verificationCode || '',
+        codeExpiresAt: result.identity.verification?.codeExpiresAt || null,
+        attempts: result.identity.verification?.attempts || 0,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
 const getMyProducts = async (req, res, next) => {
   try {
     const status = req.query.status;
@@ -984,14 +1188,14 @@ const getProductReviews = async (req, res, next) => {
 
 const suggestPrice = async (req, res, next) => {
   try {
-    const { category, condition, brand, originalPrice, yearsUsed } = req.query;
+    const { category, condition, brand, originalPrice, yearsUsed, imageUrl } = req.query;
 
     // Build comparable listings query — active + sold in the same category
     const comparableFilter = { status: { $in: ['active', 'sold'] } };
     if (category) comparableFilter.category = category;
 
     const comparables = await Product.find(comparableFilter)
-      .select('price condition brand originalPrice yearsUsed createdAt')
+      .select('price condition brand originalPrice yearsUsed embedding createdAt')
       .sort({ createdAt: -1 })
       .limit(100);
 
@@ -1004,15 +1208,56 @@ const suggestPrice = async (req, res, next) => {
       comparableListings: comparables,
     });
 
+    let finalSuggested = result.recommendedPrice;
+    let finalRange = { min: result.minPrice, max: result.maxPrice, p25: result.minPrice, p75: result.maxPrice };
+    let finalConfidence = result.confidence;
+    let finalSource = result.source;
+    let finalExplanation = result.explanation;
+    let finalFactors = result.factors;
+
+    // Attempt ML microservice price estimation
+    try {
+      const mlClient = require('../services/mlClient');
+      const mlResult = await mlClient.estimatePrice({
+        listing: {
+          category,
+          condition: condition || 'good',
+          brand: brand || '',
+          originalPrice: Number(originalPrice) || 0,
+          yearsUsed: Number(yearsUsed) || 0,
+        },
+        imageUrl: imageUrl || null,
+        comparables: comparables.map((c) => ({
+          id: c._id.toString(),
+          price: c.price,
+          originalPrice: c.originalPrice,
+          condition: c.condition,
+          category: c.category?.toString(),
+          embedding: c.embedding || [],
+        })),
+      });
+
+      if (mlResult && mlResult.suggestedPrice) {
+        finalSuggested = mlResult.suggestedPrice;
+        finalRange = mlResult.priceRange || finalRange;
+        finalConfidence = mlResult.confidence || finalConfidence;
+        finalSource = mlResult.source || 'ml-service';
+        finalExplanation = mlResult.explanation || finalExplanation;
+        finalFactors = mlResult.factors || finalFactors;
+      }
+    } catch (err) {
+      console.warn('[SuggestPrice] ML estimation warning:', err.message);
+    }
+
     res.json({
       success: true,
-      suggestedPrice: result.recommendedPrice,
-      priceRange: { min: result.minPrice, max: result.maxPrice },
-      confidence: result.confidence,
+      suggestedPrice: finalSuggested,
+      priceRange: finalRange,
+      confidence: finalConfidence,
       comparableCount: comparables.length,
-      explanation: result.explanation,
-      factors: result.factors,
-      source: result.source,
+      explanation: finalExplanation,
+      factors: finalFactors,
+      source: finalSource,
     });
   } catch (err) {
     next(err);
@@ -1033,5 +1278,6 @@ module.exports = {
   getProductReviews,
   getProductIdentityStatus,
   submitPossessionVerification,
+  requestPossession,
   suggestPrice,
 };

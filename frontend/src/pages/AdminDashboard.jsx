@@ -19,6 +19,7 @@ import { formatDate } from '../utils/format';
 import useFormatPrice from '../hooks/useFormatPrice';
 import { ScrollReveal, RevealOnScroll } from '../components/ui/ScrollReveal';
 import { TiltCard } from '../components/ui/TiltCard';
+import { PRODUCT_FALLBACK_IMAGE, handleImageError } from '../utils/imageFallback';
 
 const ICONS = {
   totalUsers: Users,
@@ -95,7 +96,8 @@ export default function AdminDashboard() {
                 >
                   <div className="w-12 h-12 rounded-lg overflow-hidden bg-slate-100 flex-shrink-0">
                     <img
-                      src={p.images?.[0]?.url || 'https://via.placeholder.com/80'}
+                      src={p.images?.[0]?.url || PRODUCT_FALLBACK_IMAGE}
+                      onError={(e) => handleImageError(e, PRODUCT_FALLBACK_IMAGE)}
                       alt=""
                       className="w-full h-full object-cover"
                     />
@@ -144,7 +146,8 @@ export default function AdminDashboard() {
                   >
                     <div className="w-12 h-12 rounded-lg overflow-hidden bg-slate-100 flex-shrink-0">
                       <img
-                        src={p.images?.[0]?.url || 'https://via.placeholder.com/80'}
+                        src={p.images?.[0]?.url || PRODUCT_FALLBACK_IMAGE}
+                        onError={(e) => handleImageError(e, PRODUCT_FALLBACK_IMAGE)}
                         alt=""
                         className="w-full h-full object-cover"
                       />

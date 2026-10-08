@@ -95,9 +95,12 @@ const getAllUsers = async (req, res, next) => {
     const filter = {};
     if (req.query.role) filter.role = req.query.role;
     if (req.query.q) {
+      // Escape regex metacharacters — same ReDoS/injection defense as the
+      // public product filters (admin-only route, but never trust input).
+      const escaped = req.query.q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       filter.$or = [
-        { name: new RegExp(req.query.q, 'i') },
-        { email: new RegExp(req.query.q, 'i') },
+        { name: new RegExp(escaped, 'i') },
+        { email: new RegExp(escaped, 'i') },
       ];
     }
     if (req.query.status === 'active') filter.isActive = true;
@@ -168,9 +171,12 @@ const getAllProducts = async (req, res, next) => {
     const filter = {};
     if (req.query.status) filter.status = req.query.status;
     if (req.query.q) {
+      // Escape regex metacharacters — same ReDoS/injection defense as the
+      // public product filters (admin-only route, but never trust input).
+      const escaped = req.query.q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       filter.$or = [
-        { title: new RegExp(req.query.q, 'i') },
-        { description: new RegExp(req.query.q, 'i') },
+        { title: new RegExp(escaped, 'i') },
+        { description: new RegExp(escaped, 'i') },
       ];
     }
     if (req.query.flagged === 'true') filter.isFlagged = true;
@@ -282,14 +288,18 @@ const markIdentityStatus = async (req, res, next) => {
       );
     }
 
-    // Never expose the identifier hash or owner details
+    // Never expose the identifier hash, verification secrets, or owner details
     res.json({
       success: true,
       identity: {
         _id: identity._id,
         identifierType: identity.identifierType,
         status: identity.status,
+        // Identity mode ('visual' = possession-based) + possession status
+        possessionMethod: identity.verification?.method || 'none',
         possessionStatus: identity.verification?.possessionStatus || 'unverified',
+        // Related listing so moderation can inspect fraud factors there
+        productId: identity.productId || null,
       },
     });
   } catch (err) {

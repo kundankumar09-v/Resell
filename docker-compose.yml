@@ -34,18 +34,20 @@ services:
     networks:
       - resell-network
 
-  # ML Service (Python Flask)
+  # ML Service (FastAPI CLIP + Fraud + Price)
   ml-service:
     build:
       context: ./ml-service
       dockerfile: Dockerfile
     container_name: resell-ml-service
     ports:
-      - "5000:5000"
+      - "8000:8000"
     environment:
-      - PORT=5000
-      - TF_CPP_MIN_LOG_LEVEL=2
-      - TF_FORCE_GPU_ALLOW_GROWTH=true
+      - PORT=8000
+      - CLIP_MODEL_NAME=ViT-B/32
+      - CLIP_PRETRAINED=openai
+      - FRAUD_THRESHOLD_HIGH=70
+      - FRAUD_THRESHOLD_MEDIUM=30
     deploy:
       resources:
         limits:
@@ -53,11 +55,11 @@ services:
         reservations:
           memory: 1G
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:5000/health"]
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8000/health"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 60s
+      start_period: 40s
     networks:
       - resell-network
 
@@ -66,19 +68,17 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    # Shared by the worker services below — Compose builds this image once
-    # and all three services (API + workers) reuse it. No extra Dockerfiles.
     image: resell-backend:latest
     container_name: resell-backend
     ports:
-      - "3000:3000"
+      - "5000:5000"
     environment:
       - NODE_ENV=production
-      - PORT=3000
+      - PORT=5000
       - MONGODB_URI=mongodb://mongodb:27017/resell
       - REDIS_URL=redis://redis:6379
-      - ML_SERVICE_URL=http://ml-service:5000
-      - CLIENT_URL=http://localhost:5173
+      - ML_SERVICE_URL=http://ml-service:8000
+      - CLIENT_URL=http://localhost:3000
       # Cloudinary (set in .env or environment)
       - CLOUDINARY_CLOUD_NAME=${CLOUDINARY_CLOUD_NAME}
       - CLOUDINARY_API_KEY=${CLOUDINARY_API_KEY}
@@ -98,7 +98,7 @@ services:
       ml-service:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/health"]
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:5000/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -107,11 +107,7 @@ services:
       - resell-network
 
   # AI / image-analysis worker — processes the "image-processing" BullMQ queue
-  # (perceptual hashing, CV condition/damage/classification, CNN feature
-  # extraction via the ML service, price recommendation + fraud re-score).
-  # Entry point matches the existing `npm run worker` package script
-  # (node src/workers/imageProcessor.js); node is invoked directly so
-  # SIGTERM reaches the worker's graceful-shutdown handler.
+  # (perceptual hashing, CLIP feature extraction via ML service, fraud scoring, price estimation)
   worker-image:
     build:
       context: ./backend
@@ -123,7 +119,7 @@ services:
       - NODE_ENV=production
       - MONGODB_URI=mongodb://mongodb:27017/resell
       - REDIS_URL=redis://redis:6379
-      - ML_SERVICE_URL=http://ml-service:5000
+      - ML_SERVICE_URL=http://ml-service:8000
     depends_on:
       mongodb:
         condition: service_healthy
@@ -132,17 +128,12 @@ services:
       ml-service:
         condition: service_healthy
     restart: unless-stopped
-    # Workers expose no HTTP port — disable the API image's inherited healthcheck
     healthcheck:
       disable: true
     networks:
       - resell-network
 
-  # Price / duplicate-processing worker — processes the "price-analysis"
-  # BullMQ queue (single-product price refinement + the periodic
-  # price-refinement-sweep enqueued by the API).
-  # Entry point matches the existing `npm run worker:price` package script
-  # (node src/workers/priceAnalyzer.js).
+  # Price / duplicate-processing worker
   worker-price:
     build:
       context: ./backend
@@ -154,7 +145,7 @@ services:
       - NODE_ENV=production
       - MONGODB_URI=mongodb://mongodb:27017/resell
       - REDIS_URL=redis://redis:6379
-      - ML_SERVICE_URL=http://ml-service:5000
+      - ML_SERVICE_URL=http://ml-service:8000
     depends_on:
       mongodb:
         condition: service_healthy
@@ -165,19 +156,6 @@ services:
       disable: true
     networks:
       - resell-network
-
-  # Frontend (optional - for production)
-  # frontend:
-  #   build:
-  #     context: ./frontend
-  #     dockerfile: Dockerfile
-  #   container_name: resell-frontend
-  #   ports:
-  #     - "5173:80"
-  #   depends_on:
-  #     - backend
-  #   networks:
-  #     - resell-network
 
 volumes:
   mongo-data:

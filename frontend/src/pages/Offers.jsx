@@ -11,6 +11,8 @@ import { ScrollReveal } from '../components/ui/ScrollReveal';
 import { formatPrice, formatDate, cn } from '../utils/format';
 import { useAuth } from '../contexts/AuthContext';
 
+import { PRODUCT_FALLBACK_IMAGE, handleImageError } from '../utils/imageFallback';
+
 const STATUS_STYLES = {
   pending: { label: 'Pending', color: 'bg-amber-100 text-amber-700 border-amber-200' },
   countered: { label: 'Countered', color: 'bg-violet-100 text-violet-700 border-violet-200' },
@@ -19,8 +21,6 @@ const STATUS_STYLES = {
   withdrawn: { label: 'Withdrawn', color: 'bg-slate-100 text-slate-600 border-slate-200' },
   expired: { label: 'Expired', color: 'bg-slate-100 text-slate-600 border-slate-200' },
 };
-
-const PLACEHOLDER = 'https://via.placeholder.com/300x300?text=No+Image';
 
 function OfferCard({ offer, mode, user, onAction }) {
   const [countering, setCountering] = useState(false);
@@ -56,10 +56,10 @@ function OfferCard({ offer, mode, user, onAction }) {
     >
       <Link to={`/product/${product._id}`} className="shrink-0">
         <img
-          src={product.images?.[0]?.url || PLACEHOLDER}
+          src={product.images?.[0]?.url || PRODUCT_FALLBACK_IMAGE}
           alt={product.title || 'Product'}
-          className="w-20 h-20 sm:w-24 sm:h-24 rounded-xl object-cover border border-slate-100"
-          onError={(e) => { e.target.src = PLACEHOLDER; }}
+          className="w-20 h-20 sm:w-24 sm:h-24 rounded-xl object-cover border border-slate-100 bg-slate-50"
+          onError={(e) => handleImageError(e, PRODUCT_FALLBACK_IMAGE)}
         />
       </Link>
 

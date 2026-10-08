@@ -23,11 +23,17 @@ const OPTIONAL_WITH_DEFAULTS = {
 };
 
 const validateEnv = () => {
+  // Support both MONGODB_URI and MONGO_URI interchangeably
+  if (!process.env.MONGODB_URI && process.env.MONGO_URI) {
+    process.env.MONGODB_URI = process.env.MONGO_URI;
+  }
+
   const missing = REQUIRED_VARS.filter((v) => !process.env[v]);
 
   if (missing.length > 0) {
-    console.error(`[Config] Missing required environment variables: ${missing.join(', ')}`);
-    console.error('[Config] Set these in your .env file or environment. See .env.example for reference.');
+    console.error(`\n[FATAL CONFIG ERROR] Missing required environment variable(s): ${missing.join(', ')}`);
+    console.error('Please create or update your "backend/.env" file with these values.');
+    console.error('Refer to "backend/.env.example" for the full list of required settings.\n');
     process.exit(1);
   }
 
@@ -42,7 +48,7 @@ const validateEnv = () => {
   } else {
     for (const v of REQUIRED_IN_PRODUCTION) {
       if (!process.env[v]) {
-        console.warn(`[Config] ${v} not set — checkout will be unavailable in development`);
+        console.warn(`[Config] ${v} not set — Stripe checkout is optional and unavailable locally`);
       }
     }
     if (!process.env.CLIENT_URL) {
@@ -53,7 +59,7 @@ const validateEnv = () => {
   for (const [key, defaultValue] of Object.entries(OPTIONAL_WITH_DEFAULTS)) {
     if (!process.env[key]) {
       process.env[key] = defaultValue;
-      console.log(`[Config] ${key} not set, using default: ${defaultValue}`);
+      console.log(`[Config] ${key} not set, using default: ${defaultValue}${key === 'REDIS_URL' ? ' (workers require Redis; queues remain disabled when it is unavailable)' : ''}`);
     }
   }
 

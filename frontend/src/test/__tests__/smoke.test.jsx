@@ -5,6 +5,7 @@ import Home from '../../pages/Home';
 import Marketplace from '../../pages/Marketplace';
 import Chat from '../../pages/Chat';
 import ProductDetail from '../../pages/ProductDetail';
+import { imageGuidanceFor, MIN_IMAGES, MAX_IMAGES, RECOMMENDED_IMAGES } from '../../utils/imageGuidance';
 
 // Mock API calls globally
 vi.mock('../../services/services', () => ({
@@ -45,6 +46,20 @@ vi.mock('../../services/services', () => ({
 vi.mock('react-router-dom', async () => {
   const actual = await vi.importActual('react-router-dom');
   return { ...actual, useParams: () => ({ id: '1' }) };
+});
+
+describe('SellProduct image guidance', () => {
+  it('keeps the multi-angle image limits', () => {
+    expect(MIN_IMAGES).toBe(3);
+    expect(RECOMMENDED_IMAGES).toBe('4-6');
+    expect(MAX_IMAGES).toBe(8);
+  });
+
+  it('provides category-specific guidance and a generic fallback', () => {
+    expect(imageGuidanceFor('Digital Camera')).toContain('Lens / mount detail');
+    expect(imageGuidanceFor('Phones')).toContain('Front of the phone (screen on)');
+    expect(imageGuidanceFor('Miscellaneous')).toContain('Front / main view');
+  });
 });
 
 describe('Smoke Tests — Pages render without crashing', () => {

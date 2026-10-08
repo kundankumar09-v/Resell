@@ -1,0 +1,9 @@
+{
+  "flag_threshold": 0.95,
+  "review_threshold": 0.475,
+  "pr_f1_at_flag": 1.0,
+  "trained_at": 1699992224.0,
+  "n_train": 1200,
+  "n_calib": 400,
+  "n_test": 400
+}

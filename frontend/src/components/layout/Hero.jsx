@@ -10,6 +10,7 @@ import {
 import { ArrowRight, ChevronDown, Sparkles } from 'lucide-react';
 import { productService } from '../../services/services';
 import useFormatPrice from '../../hooks/useFormatPrice';
+import { useAuth } from '../../contexts/AuthContext';
 
 const HEADLINE_LINES = [
   ['Buy', 'less.'],
@@ -75,8 +76,7 @@ function AnimatedHeadline() {
 
 function FloatingProductCard({ product, style, index }) {
   const formatPrice = useFormatPrice();
-  const img = product.images?.find((i) => i.isPrimary)?.url || product.images?.[0]?.url;
-  if (!img) return null;
+  const img = product.images?.find((i) => i.isPrimary)?.url || product.images?.[0]?.url || 'data:image/svg+xml;charset=UTF-8,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' width=\'300\' height=\'300\' viewBox=\'0 0 300 300\'%3E%3Crect width=\'300\' height=\'300\' fill=\'%23e2e8f0\'/%3E%3C/svg%3E';
 
   return (
     <motion.div
@@ -106,12 +106,16 @@ function FloatingProductCard({ product, style, index }) {
           whileHover={{ scale: 1.07, zIndex: 30 }}
           className="group cursor-pointer rounded-2xl border border-white/70 bg-white/75 shadow-[0_20px_50px_-15px_rgba(15,23,42,0.25)] backdrop-blur-xl will-change-transform"
         >
-          <div className="relative h-28 xl:h-32 overflow-hidden rounded-t-2xl">
+          <div className="relative h-28 xl:h-32 overflow-hidden rounded-t-2xl bg-slate-100">
             <img
               src={img}
               alt={product.title}
               loading="lazy"
               className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-110"
+              onError={(e) => {
+                e.target.onerror = null;
+                e.target.src = "data:image/svg+xml;charset=UTF-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='300' viewBox='0 0 300 300'%3E%3Crect width='300' height='300' fill='%23e2e8f0'/%3E%3C/svg%3E";
+              }}
             />
             {product.condition && (
               <span className="absolute left-2 top-2 rounded-full bg-white/90 px-2 py-0.5 text-[10px] font-semibold capitalize text-brand-700 backdrop-blur">
@@ -144,6 +148,7 @@ function MouseParallax({ children, depth = 1 }) {
 }
 
 export default function Hero() {
+  const { user } = useAuth();
   const sectionRef = useRef(null);
   const formatPrice = useFormatPrice('USD');
   const trending = useTrendingProducts();
@@ -227,12 +232,21 @@ export default function Hero() {
               <ArrowRight className="relative h-4 w-4 transition-transform duration-300 group-hover:translate-x-1" />
             </Link>
 
-            <Link
-              to="/sell"
-              className="inline-flex items-center gap-2 rounded-full border border-slate-200/80 bg-white/70 px-9 py-4 text-sm font-semibold text-slate-800 backdrop-blur-xl transition-all duration-300 hover:-translate-y-0.5 hover:border-brand-300 hover:bg-white hover:shadow-[0_16px_40px_-14px_rgba(102,113,248,0.4)] active:scale-95"
-            >
-              Sell an Item
-            </Link>
+            {user?.role === 'buyer' ? (
+              <Link
+                to="/marketplace?sort=popular"
+                className="inline-flex items-center gap-2 rounded-full border border-slate-200/80 bg-white/70 px-9 py-4 text-sm font-semibold text-slate-800 backdrop-blur-xl transition-all duration-300 hover:-translate-y-0.5 hover:border-brand-300 hover:bg-white hover:shadow-[0_16px_40px_-14px_rgba(102,113,248,0.4)] active:scale-95"
+              >
+                Trending Deals
+              </Link>
+            ) : (
+              <Link
+                to="/sell"
+                className="inline-flex items-center gap-2 rounded-full border border-slate-200/80 bg-white/70 px-9 py-4 text-sm font-semibold text-slate-800 backdrop-blur-xl transition-all duration-300 hover:-translate-y-0.5 hover:border-brand-300 hover:bg-white hover:shadow-[0_16px_40px_-14px_rgba(102,113,248,0.4)] active:scale-95"
+              >
+                Sell an Item
+              </Link>
+            )}
           </motion.div>
 
           {/* Stats */}

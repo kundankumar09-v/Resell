@@ -9,6 +9,7 @@ import useFormatPrice from '../hooks/useFormatPrice';
 import DeliveryAddressForm from '../components/checkout/DeliveryAddressForm';
 import PageTransition from '../components/layout/PageTransition';
 import Loader from '../components/ui/Loader';
+import { PRODUCT_FALLBACK_IMAGE, handleImageError } from '../utils/imageFallback';
 
 export default function Checkout() {
   const { id } = useParams();
@@ -108,9 +109,12 @@ export default function Checkout() {
             <div className="card p-6 space-y-4">
               <h2 className="font-semibold text-lg">Order Summary</h2>
               <div className="flex items-start gap-4">
-                {product.images?.[0] && (
-                  <img src={product.images[0].url} alt="" className="w-20 h-20 rounded-lg object-cover" />
-                )}
+                <img
+                  src={product.images?.[0]?.url || PRODUCT_FALLBACK_IMAGE}
+                  alt=""
+                  className="w-20 h-20 rounded-lg object-cover bg-slate-100 flex-shrink-0"
+                  onError={(e) => handleImageError(e, PRODUCT_FALLBACK_IMAGE)}
+                />
                 <div className="flex-1">
                   <p className="font-medium">{product.title}</p>
                   <p className="text-sm text-slate-500">{product.category?.name}</p>

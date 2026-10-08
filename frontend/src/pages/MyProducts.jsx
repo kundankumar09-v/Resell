@@ -9,6 +9,7 @@ import {
   Tag,
   CheckCircle,
   XCircle,
+  AlertTriangle,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { productService } from '../services/services';
@@ -19,6 +20,7 @@ import { formatDate, cn } from '../utils/format';
 import useFormatPrice from '../hooks/useFormatPrice';
 import { ScrollReveal, RevealOnScroll } from '../components/ui/ScrollReveal';
 import MagneticButton from '../components/ui/MagneticButton';
+import { PRODUCT_FALLBACK_IMAGE, handleImageError } from '../utils/imageFallback';
 
 export default function MyProducts() {
   const formatPrice = useFormatPrice('USD');
@@ -121,7 +123,8 @@ export default function MyProducts() {
                     className="flex-shrink-0 w-full sm:w-32 h-32 rounded-xl overflow-hidden bg-slate-100"
                   >
                     <img
-                      src={p.images?.[0]?.url || 'https://via.placeholder.com/300'}
+                      src={p.images?.[0]?.url || PRODUCT_FALLBACK_IMAGE}
+                      onError={(e) => handleImageError(e, PRODUCT_FALLBACK_IMAGE)}
                       alt=""
                       className="w-full h-full object-cover"
                     />
@@ -135,25 +138,52 @@ export default function MyProducts() {
                       >
                         {p.title}
                       </Link>
-                      <span
-                        className={cn(
-                          'badge flex-shrink-0',
-                          p.status === 'active' && 'bg-emerald-100 text-emerald-700',
-                          p.status === 'sold' && 'bg-slate-100 text-slate-700',
-                          p.status === 'pending' && 'bg-amber-100 text-amber-700',
-                          p.status === 'rejected' && 'bg-red-100 text-red-700'
+                      <div className="flex items-center gap-1.5 flex-shrink-0">
+                        {p.status === 'pendingReview' ? (
+                          <span className="badge bg-amber-100 text-amber-700 font-medium">
+                            AI Review Needed
+                          </span>
+                        ) : (
+                          <span
+                            className={cn(
+                              'badge',
+                              p.status === 'active' && 'bg-emerald-100 text-emerald-700',
+                              p.status === 'sold' && 'bg-slate-100 text-slate-700',
+                              p.status === 'pending' && 'bg-amber-100 text-amber-700',
+                              p.status === 'rejected' && 'bg-red-100 text-red-700'
+                            )}
+                          >
+                            {p.status}
+                          </span>
                         )}
-                      >
-                        {p.status}
-                      </span>
+                        {p.isFlagged && (
+                          <span className="badge bg-red-100 text-red-700">Flagged</span>
+                        )}
+                      </div>
                     </div>
 
                     <p className="text-sm text-slate-500 line-clamp-1 mb-2">{p.description}</p>
+
+                    {(p.status === 'pendingReview' || (p.fraudReasons && p.fraudReasons.length > 0)) && (
+                      <div className="mb-3 p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs text-amber-800 dark:text-amber-200 flex items-center gap-2">
+                        <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                        <span>
+                          <strong className="font-semibold">AI Security Flag:</strong>{' '}
+                          {p.fraudReasons?.join(' · ') || 'Under automatic fraud & quality review'}
+                          {p.fraudScore !== undefined && p.fraudScore !== null ? ` (Risk: ${p.fraudScore}/100)` : ''}
+                        </span>
+                      </div>
+                    )}
 
                     <div className="flex items-center gap-3 mb-3">
                       <span className="font-display font-bold text-lg">
                         {formatPrice(p.price)}
                       </span>
+                      {p.suggestedPrice && (
+                        <span className="text-xs text-brand-600 dark:text-brand-400 bg-brand-500/10 px-2 py-0.5 rounded-full">
+                          AI Est: {formatPrice(p.suggestedPrice)}
+                        </span>
+                      )}
                       {p.views > 0 && (
                         <span className="text-xs text-slate-500 flex items-center gap-1">
                           <Eye className="w-3 h-3" /> {p.views}

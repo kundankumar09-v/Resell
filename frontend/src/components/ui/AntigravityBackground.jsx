@@ -170,8 +170,7 @@ export default function AntigravityBackground({
       <div
         className="absolute inset-0"
         style={{
-          background:
-            'radial-gradient(ellipse at center, transparent 55%, rgba(250,250,252,0.9) 100%)',
+          background: 'var(--rs-vignette, radial-gradient(ellipse at center, transparent 55%, rgba(250,250,252,0.9) 100%))',
         }}
       />
     </div>

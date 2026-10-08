@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const AppError = require('../utils/AppError');
 const {
   getProducts,
   getProduct,
@@ -14,6 +15,7 @@ const {
   getProductReviews,
   getProductIdentityStatus,
   submitPossessionVerification,
+  requestPossession,
   suggestPrice,
 } = require('../controllers/productController');
 const { protect, optionalAuth } = require('../middleware/auth');
@@ -34,6 +36,7 @@ router.get('/:id', optionalAuth, getProduct);
 router.get('/:id/similar', optionalAuth, getSimilarProducts);
 router.get('/:id/reviews', optionalAuth, getProductReviews);
 router.get('/:id/identity', optionalAuth, getProductIdentityStatus);
+router.post('/:id/identity/possession-challenge', protect, requestPossession);
 router.post(
   '/:id/identity/verify-possession',
   protect,
@@ -44,7 +47,16 @@ router.post(
 router.post(
   '/upload-images',
   protect,
-  upload.array('images', 8),
+  (req, res, next) => {
+    upload.array('images', 8)(req, res, (err) => {
+      if (err) {
+        // Multer validation errors (file type, count, size) are client
+        // errors — 400, never a 500.
+        return next(new AppError(err.message || 'Upload failed', 400, 'UPLOAD_INVALID'));
+      }
+      next();
+    });
+  },
   uploadImages
 );
 router.post('/', protect, productCreateLimiter, createProductValidation, createProduct);

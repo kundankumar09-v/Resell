@@ -8,6 +8,7 @@ vi.mock('../../services/services', () => ({
     get: vi.fn(),
     similar: vi.fn(),
     reviews: vi.fn(),
+    identityStatus: vi.fn(),
   },
   favoriteService: {
     check: vi.fn(),
@@ -135,6 +136,7 @@ beforeEach(() => {
       canReview: { allowed: false, reason: 'purchase_required' },
     },
   });
+  vi.mocked(productService.identityStatus).mockResolvedValue({ data: { tracked: false } });
   vi.mocked(favoriteService.check).mockResolvedValue({ data: { favorited: false } });
   vi.mocked(sellerService.trust).mockResolvedValue({
     data: { trust: { score: 80, level: 'trusted', breakdown: {} } },

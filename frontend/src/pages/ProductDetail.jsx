@@ -16,9 +16,13 @@ import {
   Tag,
   Sparkles,
   Star,
+  Info,
+  Check,
+  AlertTriangle,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { productService, favoriteService, chatService, reportService, sellerService, offerService } from '../services/services';
+import { productVerificationService } from '../services/productVerification';
 import { useAuth } from '../contexts/AuthContext';
 import { formatDate, getConditionLabel, getConditionColor, cn } from '../utils/format';
 import ImageGallery from '../components/product/ImageGallery';
@@ -51,6 +55,7 @@ export default function ProductDetail() {
   const [possessCode, setPossessCode] = useState('');
   const [possessProof, setPossessProof] = useState(null);
   const [possessBusy, setPossessBusy] = useState(false);
+  const [challengeBusy, setChallengeBusy] = useState(false);
 
   useEffect(() => {
     setLoading(true);
@@ -84,10 +89,10 @@ export default function ProductDetail() {
     if (user) {
       favoriteService.check(id).then((r) => setFavorited(r.data.favorited)).catch(() => {});
     }
-    // Identity/provenance status (tracked products only)
-    if (user && product.seller?._id === user._id) {
-      productService.identityStatus(id).then((r) => setIdentity(r.data)).catch(() => {});
-    }
+    // Identity/provenance status: the owner gets possession details, buyers
+    // and anonymous viewers get the buyer-facing trust signals (the API
+    // never exposes the raw identifier or internal fraud scores).
+    productService.identityStatus(id).then((r) => setIdentity(r.data)).catch(() => {});
     loadReviews(product._id);
   }, [product, user, id, loadReviews]);
 
@@ -97,6 +102,19 @@ export default function ProductDetail() {
       setIdentity(r.data);
     } catch {
       /* ignore */
+    }
+  };
+
+  const handleRequestChallenge = async () => {
+    try {
+      setChallengeBusy(true);
+      await productVerificationService.request(id);
+      toast.success('New verification code issued — show it beside the product in your proof photo.');
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Could not request a verification code');
+    } finally {
+      await refreshIdentity();
+      setChallengeBusy(false);
     }
   };
 
@@ -280,6 +298,28 @@ export default function ProductDetail() {
             </button>
           </ScrollReveal>
 
+          {/* AI Moderation & Flagged Notice */}
+          {(product.status === 'pendingReview' || product.isFlagged) && (
+            <div className="mb-6 p-4 rounded-2xl bg-amber-500/10 border border-amber-500/20 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-amber-800 dark:text-amber-200">
+              <div className="flex items-start sm:items-center gap-3">
+                <AlertTriangle className="w-5 h-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5 sm:mt-0" />
+                <div>
+                  <p className="font-semibold text-sm">
+                    {product.status === 'pendingReview' ? 'Listing Under AI Moderation Review' : 'Listing Flagged for Review'}
+                  </p>
+                  <p className="text-xs opacity-85">
+                    {product.fraudReasons && product.fraudReasons.length > 0
+                      ? `Signals detected: ${product.fraudReasons.join(' · ')}`
+                      : 'This listing is held for security verification and is temporarily hidden from public discovery.'}
+                  </p>
+                </div>
+              </div>
+              <span className="badge bg-amber-500/20 text-amber-700 dark:text-amber-300 font-mono text-xs self-start sm:self-center">
+                Risk Score: {product.fraudScore !== undefined && product.fraudScore !== null ? `${product.fraudScore}/100` : 'Pending'}
+              </span>
+            </div>
+          )}
+
           <div className="grid lg:grid-cols-3 gap-8">
             {/* Left: Gallery + Details */}
             <div className="lg:col-span-2 space-y-6">
@@ -367,14 +407,38 @@ export default function ProductDetail() {
                     </motion.div>
                   )}
 
-                  {/* Proof of possession (listing owner only, tracked identities) */}
+                  {/* Product Verification (SCRUM-25): possession challenge
+                      (listing owner only, tracked identities). Status is
+                      determined by the backend — Pending / Verified / Failed
+                      / Expired. Raw identifiers are never exposed. */}
                   {user && product.seller?._id === user._id && identity?.tracked && (
                     <motion.div
                       initial={{ opacity: 0, y: 10 }}
                       animate={{ opacity: 1, y: 0 }}
                       className="border-t border-slate-200 pt-6"
                     >
-                      <h3 className="font-semibold mb-1">Verify Possession</h3>
+                      <div className="flex items-center justify-between mb-1">
+                        <h3 className="font-semibold">Product Verification</h3>
+                        {(() => {
+                          const possessionStatus = identity.verification?.possessionStatus || 'unverified';
+                          const expired =
+                            possessionStatus !== 'verified' &&
+                            identity.possession?.codeExpiresAt &&
+                            new Date(identity.possession.codeExpiresAt) < new Date();
+                          const label = possessionStatus === 'verified' ? 'Verified' : possessionStatus === 'failed' ? 'Failed' : expired ? 'Expired' : 'Pending';
+                          const tone =
+                            possessionStatus === 'verified'
+                              ? 'bg-emerald-100 text-emerald-700'
+                              : possessionStatus === 'failed' || expired
+                              ? 'bg-red-100 text-red-700'
+                              : 'bg-amber-100 text-amber-700';
+                          return (
+                            <span className={cn('text-xs px-2 py-0.5 rounded-full font-medium', tone)}>
+                              {label}
+                            </span>
+                          );
+                        })()}
+                      </div>
                       {identity.verification?.possessionStatus === 'verified' ? (
                         <p className="text-sm text-emerald-600">
                           Possession verified — buyers can see this listing has verified physical ownership.
@@ -416,8 +480,61 @@ export default function ProductDetail() {
                               {possessBusy ? 'Verifying…' : 'Verify'}
                             </button>
                           </div>
+                          {/* Request a fresh short-lived code (backend-issued;
+                              never trusted from the client). Useful when the
+                              current code has expired or was never issued. */}
+                          {(() => {
+                            const expired =
+                              identity.possession?.codeExpiresAt &&
+                              new Date(identity.possession.codeExpiresAt) < new Date();
+                            const hasCode = !!identity.possession?.verificationCode;
+                            return (
+                              <button
+                                type="button"
+                                onClick={handleRequestChallenge}
+                                disabled={challengeBusy}
+                                className="mt-3 text-xs text-slate-500 underline hover:text-slate-700 disabled:opacity-50"
+                              >
+                                {challengeBusy
+                                  ? 'Requesting…'
+                                  : expired || !hasCode
+                                  ? 'Request a new verification code'
+                                  : 'Request a different code'}
+                              </button>
+                            );
+                          })()}
                         </>
                       )}
+                    </motion.div>
+                  )}
+
+                  {/* Product Verification (SCRUM-25): identifier-free /
+                      untracked listings. The seller can opt in to a
+                      possession challenge directly from the listing page —
+                      the backend lazily registers a possession identity
+                      (no sensitive identifier required) and issues a
+                      short-lived code. Rendered only once the identity
+                      status has loaded so it never flashes during fetch. */}
+                  {user && product.seller?._id === user._id && identity && !identity.tracked && (
+                    <motion.div
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      className="border-t border-slate-200 pt-6"
+                    >
+                      <h3 className="font-semibold mb-1">Product Verification</h3>
+                      <p className="text-sm text-slate-500 mb-3">
+                        Verify physical possession of this product: request a short-lived code,
+                        photograph the product beside it, and submit the code below. Buyers will
+                        see that this listing has verified physical ownership.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={handleRequestChallenge}
+                        disabled={challengeBusy}
+                        className="btn-secondary px-4 py-2 text-sm disabled:opacity-50"
+                      >
+                        {challengeBusy ? 'Requesting…' : 'Start possession verification'}
+                      </button>
                     </motion.div>
                   )}
                 </div>
@@ -486,7 +603,7 @@ export default function ProductDetail() {
               </ScrollReveal>
 
               <ScrollReveal delay={0.15} direction="up">
-                <AIAnalysisPanel aiAnalysis={product.aiAnalysis} />
+                <AIAnalysisPanel aiAnalysis={product.aiAnalysis} currencyCode={product.currencyCode} />
               </ScrollReveal>
 
               <ScrollReveal delay={0.2} direction="up">
@@ -495,6 +612,75 @@ export default function ProductDetail() {
                   trust={trust}
                   onMessage={handleContactSeller}
                 />
+              </ScrollReveal>
+
+              {/* Buyer-facing trust signals. Every item is shown only when
+                  the backend actually reports that state — nothing is
+                  labelled "verified" merely because a field exists. Internal
+                  fraud scores and moderation details are never shown. */}
+              <ScrollReveal delay={0.22} direction="up">
+                <div className="card p-4">
+                  <div className="flex items-center gap-2 mb-3">
+                    <ShieldCheck className="w-4 h-4 text-brand-600" />
+                    <span className="text-sm font-semibold text-slate-700">Trust & Verification</span>
+                  </div>
+                  <ul className="space-y-2 text-sm">
+                    <li className="flex items-center gap-2">
+                      {product.seller?.isVerified ? (
+                        <>
+                          <Check className="w-4 h-4 text-emerald-500 flex-shrink-0" />
+                          <span className="text-slate-700">Seller is verified</span>
+                        </>
+                      ) : (
+                        <>
+                          <Info className="w-4 h-4 text-slate-400 flex-shrink-0" />
+                          <span className="text-slate-500">Seller verification pending</span>
+                        </>
+                      )}
+                    </li>
+                    <li className="flex items-center gap-2">
+                      {identity?.tracked && identity.provenance?.valid ? (
+                        <>
+                          <Check className="w-4 h-4 text-emerald-500 flex-shrink-0" />
+                          <span className="text-slate-700">
+                            Product identity registered — provenance history verified
+                          </span>
+                        </>
+                      ) : identity?.tracked ? (
+                        <>
+                          <AlertTriangle className="w-4 h-4 text-amber-500 flex-shrink-0" />
+                          <span className="text-amber-600">
+                            Product identity registered — provenance history could not be verified
+                          </span>
+                        </>
+                      ) : (
+                        <>
+                          <Info className="w-4 h-4 text-slate-400 flex-shrink-0" />
+                          <span className="text-slate-500">No product identity registered for this listing</span>
+                        </>
+                      )}
+                    </li>
+                    <li className="flex items-center gap-2">
+                      {identity?.tracked && identity.verification?.possessionStatus === 'verified' ? (
+                        <>
+                          <Check className="w-4 h-4 text-emerald-500 flex-shrink-0" />
+                          <span className="text-slate-700">
+                            Possession verified by the seller (photo + code)
+                          </span>
+                        </>
+                      ) : identity?.tracked ? (
+                        <>
+                          <Info className="w-4 h-4 text-slate-400 flex-shrink-0" />
+                          <span className="text-slate-500">Possession not yet verified by the seller</span>
+                        </>
+                      ) : null}
+                    </li>
+                    <li className="flex items-center gap-2">
+                      <Check className="w-4 h-4 text-emerald-500 flex-shrink-0" />
+                      <span className="text-slate-700">Reviews are written only by verified purchasers</span>
+                    </li>
+                  </ul>
+                </div>
               </ScrollReveal>
 
               {product.status !== 'sold' && (

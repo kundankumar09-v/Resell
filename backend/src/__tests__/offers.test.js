@@ -250,6 +250,28 @@ describe('Offers — authorization & transitions', () => {
       expect((await Offer.findById(body.offer._id)).status).toBe('pending');
     });
 
+    it('accepts a countered offer via the dedicated endpoint (no stale 404)', async () => {
+      const { body } = await makeOffer(buyerToken).expect(201);
+      await counterOffer(sellerToken, body.offer._id, 450).expect(201);
+
+      const res = await request(app)
+        .post(`/api/offers/${body.offer._id}/accept`)
+        .set('Authorization', `Bearer ${sellerToken}`)
+        .expect(200);
+      expect(res.body.offer.status).toBe('accepted');
+    });
+
+    it('rejects a countered offer via the dedicated endpoint (no stale 404)', async () => {
+      const { body } = await makeOffer(buyerToken).expect(201);
+      await counterOffer(sellerToken, body.offer._id, 450).expect(201);
+
+      const res = await request(app)
+        .post(`/api/offers/${body.offer._id}/reject`)
+        .set('Authorization', `Bearer ${sellerToken}`)
+        .expect(200);
+      expect(res.body.offer.status).toBe('rejected');
+    });
+
     it('reject endpoint only works once (state rules preserved)', async () => {
       const { body } = await makeOffer(buyerToken).expect(201);
       await request(app)

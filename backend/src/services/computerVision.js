@@ -71,15 +71,26 @@ const analyzeImageQuality = async (imageBuffer) => {
   }
 };
 
+/**
+ * Condition score semantics (explicit):
+ *   - 100 = like-new condition, lower = worse, 30 = worst meaningful estimate
+ *   - 0 / null = NO visual evidence was available (never fabricated)
+ *   - The score is a deterministic estimate of the item's visual condition
+ *     derived from image quality (lighting, contrast, sharpness).
+ *   - When analysis is unavailable the result is explicitly
+ *     `available: false` with a null score — callers must show
+ *     "insufficient evidence" rather than a fabricated number.
+ */
 const assessCondition = async (imageBuffer) => {
   const quality = await analyzeImageQuality(imageBuffer);
 
   if (!quality.available) {
     return {
-      score: 75,
-      label: 'good',
+      score: null,
+      label: null,
+      available: false,
       confidence: 0.3,
-      factors: ['visual analysis unavailable, defaulting to good condition'],
+      factors: ['Visual analysis unavailable — insufficient evidence for a condition estimate'],
     };
   }
 
@@ -122,20 +133,29 @@ const assessCondition = async (imageBuffer) => {
   return {
     score,
     label,
-    confidence: quality.available ? 0.65 : 0.3,
+    available: true,
+    confidence: 0.65,
     factors,
   };
 };
 
+/**
+ * Damage score semantics (explicit):
+ *   - HIGHER means MORE damage (0 = no damage indicators, 100 = severe).
+ *   - level: low (< 25) / medium (25–49) / high (>= 50).
+ *   - 0 / null = NO visual evidence was available (never fabricated as
+ *     "low damage" — callers must show "insufficient evidence").
+ */
 const detectDamage = async (imageBuffer) => {
   const quality = await analyzeImageQuality(imageBuffer);
 
   if (!quality.available) {
     return {
-      score: 5,
-      level: 'low',
+      score: null,
+      level: null,
+      available: false,
       confidence: 0.3,
-      description: 'Damage analysis unavailable',
+      description: 'Damage analysis unavailable — insufficient evidence',
       factors: [],
     };
   }
@@ -213,24 +233,8 @@ const detectDamage = async (imageBuffer) => {
 };
 
 const classifyProduct = async (imageBuffer, metadata = {}) => {
-  // Try real image-based classification via MobileNet first
-  try {
-    const { classifyImage, CONFIDENCE_THRESHOLD } = require('./imageClassifier');
-    const imageResult = await classifyImage(imageBuffer);
-
-    if (imageResult.source === 'mobilenet' && imageResult.confidence >= CONFIDENCE_THRESHOLD) {
-      return {
-        category: imageResult.category,
-        confidence: imageResult.confidence,
-        source: 'image-model',
-        topLabels: imageResult.topLabels,
-      };
-    }
-  } catch {
-    // Image classifier unavailable — fall through to keyword matching
-  }
-
-  // Fallback: keyword-based classification using filename + title
+  // Keyword-based score from filename + title. Computed first so it can
+  // both stand alone and corroborate the image-model prediction below.
   const filename = (metadata.filename || '').toLowerCase();
   const title = (metadata.title || '').toLowerCase();
   const combined = `${filename} ${title}`;
@@ -259,27 +263,70 @@ const classifyProduct = async (imageBuffer, metadata = {}) => {
     Automotive: ['car', 'tire', 'engine', 'brake', 'helmet', 'car accessory'],
   };
 
-  let bestCategory = 'Other';
-  let bestScore = 0;
+  let keywordCategory = 'Other';
+  let keywordScore = 0;
 
   for (const [category, keywords] of Object.entries(CATEGORY_KEYWORDS)) {
     let score = 0;
     for (const kw of keywords) {
       if (combined.includes(kw)) score += 2;
     }
-    if (score > bestScore) {
-      bestScore = score;
-      bestCategory = category;
+    if (score > keywordScore) {
+      keywordScore = score;
+      keywordCategory = category;
     }
   }
 
-  const confidence = Math.min(0.95, 0.4 + bestScore * 0.1);
+  // Real image-based classification via MobileNet (graceful on failure —
+  // unavailable ML is never an error condition, just no supporting evidence).
+  let imageResult = null;
+  try {
+    const { classifyImage, CONFIDENCE_THRESHOLD } = require('./imageClassifier');
+    const result = await classifyImage(imageBuffer);
+    if (result && result.source === 'mobilenet') {
+      imageResult = { ...result, threshold: CONFIDENCE_THRESHOLD };
+    }
+  } catch {
+    // Image classifier unavailable — keyword matching only
+  }
+
+  // 1. Confident image-model prediction wins. When the keyword metadata
+  //    independently agrees, that agreement is real evidence — a modest,
+  //    bounded confidence boost (never fabricated certainty).
+  if (imageResult && imageResult.confidence >= imageResult.threshold) {
+    const agrees = keywordScore > 0 && keywordCategory === imageResult.category;
+    return {
+      category: imageResult.category,
+      confidence: Number(Math.min(0.95, imageResult.confidence + (agrees ? 0.1 : 0)).toFixed(2)),
+      source: agrees ? 'image-model+keyword' : 'image-model',
+      topLabels: imageResult.topLabels,
+    };
+  }
+
+  // 2. Sub-threshold image-model prediction corroborated by the keyword
+  //    metadata: two independent methods agreeing is sufficient evidence to
+  //    avoid an incorrect "Other" — the lower of the two confidences is kept
+  //    so low-confidence predictions clearly remain low confidence.
+  if (imageResult && keywordScore > 0 && keywordCategory === imageResult.category) {
+    return {
+      category: imageResult.category,
+      confidence: Number(
+        Math.min(0.95, Math.max(imageResult.confidence, 0.4 + keywordScore * 0.1)).toFixed(2)
+      ),
+      source: 'image-model+keyword',
+      topLabels: imageResult.topLabels,
+    };
+  }
+
+  // 3. Keyword fallback — low-confidence predictions remain low confidence
+  //    and "Other" is returned only when no sufficient evidence exists.
+  const confidence = Math.min(0.95, 0.4 + keywordScore * 0.1);
 
   return {
-    category: bestCategory,
+    category: keywordCategory,
     confidence: Number(confidence.toFixed(2)),
-    keywordsMatched: bestScore,
-    source: bestScore > 0 ? 'keyword' : 'none',
+    keywordsMatched: keywordScore,
+    source: keywordScore > 0 ? 'keyword' : 'none',
   };
 };
 

@@ -1,0 +1,9 @@
+{
+  "embedding_sim_threshold": 0.8174,
+  "fpr_target": 0.02,
+  "fpr_negatives": "easy+hard adversarial pool",
+  "old_fixed_threshold": 0.88,
+  "chosen_at": 1790906194.55328,
+  "n_sources": 100,
+  "n_variants": 1000
+}

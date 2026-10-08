@@ -37,6 +37,9 @@ export const AuthProvider = ({ children }) => {
 
   const login = async (credentials) => {
     const request = ++requestRef.current;
+    // Drop cached GET responses from any previous session so a different
+    // user on the same browser never sees stale protected data.
+    clearApiCache();
     try {
       const { data } = await authService.login(credentials);
       if (mountedRef.current && request === requestRef.current) setUser(data.user);
@@ -48,6 +51,7 @@ export const AuthProvider = ({ children }) => {
 
   const register = async (userData) => {
     const request = ++requestRef.current;
+    clearApiCache();
     try {
       const { data } = await authService.register(userData);
       if (mountedRef.current && request === requestRef.current) setUser(data.user);

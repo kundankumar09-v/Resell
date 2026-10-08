@@ -36,24 +36,34 @@ const mockCurrencyValue = {
   refreshRates: vi.fn(),
 };
 
-export function renderWithProviders(ui, { authValue, socketValue, currencyValue, route = '/' } = {}) {
-  const auth = { ...mockAuthValue, ...authValue };
-  const socket = { ...mockSocketValue, ...socketValue };
-  const currency = { ...mockCurrencyValue, ...currencyValue };
+// vi.mock factories are hoisted to module scope, so they cannot close over
+// per-render locals. Keep the active values in a module-level holder that
+// renderWithProviders swaps before each render.
+const active = {
+  auth: mockAuthValue,
+  socket: mockSocketValue,
+  currency: mockCurrencyValue,
+};
 
-  // Mock useAuth and useSocket hooks
-  vi.mock('../contexts/AuthContext', () => ({
-    useAuth: () => auth,
-    AuthProvider: ({ children }) => children,
-  }));
-  vi.mock('../contexts/SocketContext', () => ({
-    useSocket: () => socket,
-    SocketProvider: ({ children }) => children,
-  }));
-  vi.mock('../contexts/CurrencyContext', () => ({
-    useCurrency: () => currency,
-    CurrencyProvider: ({ children }) => children,
-  }));
+vi.mock('../contexts/AuthContext', () => ({
+  useAuth: () => active.auth,
+  AuthProvider: ({ children }) => children,
+}));
+
+vi.mock('../contexts/SocketContext', () => ({
+  useSocket: () => active.socket,
+  SocketProvider: ({ children }) => children,
+}));
+
+vi.mock('../contexts/CurrencyContext', () => ({
+  useCurrency: () => active.currency,
+  CurrencyProvider: ({ children }) => children,
+}));
+
+export function renderWithProviders(ui, { authValue, socketValue, currencyValue, route = '/' } = {}) {
+  active.auth = { ...mockAuthValue, ...authValue };
+  active.socket = { ...mockSocketValue, ...socketValue };
+  active.currency = { ...mockCurrencyValue, ...currencyValue };
 
   return render(
     <BrowserRouter>

@@ -17,6 +17,7 @@ import { formatDate, cn } from '../utils/format';
 import useFormatPrice from '../hooks/useFormatPrice';
 import PageTransition from '../components/layout/PageTransition';
 import Loader from '../components/ui/Loader';
+import { PRODUCT_FALLBACK_IMAGE, handleImageError } from '../utils/imageFallback';
 
 const STATUS_CONFIG = {
   pending_payment: { label: 'Awaiting Payment', icon: Clock, color: 'text-amber-500' },
@@ -79,9 +80,12 @@ function OrderCard({ order, mode, onAction }) {
       className="card p-4 hover:shadow-md transition-shadow"
     >
       <div className="flex items-center gap-4">
-        {order.product?.images?.[0] && (
-          <img src={order.product.images[0].url} alt="" className="w-16 h-16 rounded-lg object-cover" />
-        )}
+        <img
+          src={order.product?.images?.[0]?.url || PRODUCT_FALLBACK_IMAGE}
+          alt=""
+          className="w-16 h-16 rounded-lg object-cover bg-slate-100 flex-shrink-0"
+          onError={(e) => handleImageError(e, PRODUCT_FALLBACK_IMAGE)}
+        />
         <div className="flex-1 min-w-0">
           <p className="font-medium truncate">{order.product?.title}</p>
           <p className="text-sm text-slate-500">

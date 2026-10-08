@@ -31,6 +31,12 @@ const errorHandler = (err, req, res, next) => {
     } else {
       console.error('[Error]', error);
     }
+  } else if (error.statusCode >= 500) {
+    // Production: log real server failures (server-side console only —
+    // never leaked to the client response) so 5xx are diagnosable.
+    console.error(
+      `[Error] ${error.statusCode} ${error.code}: ${error.message} — ${req.method} ${req.originalUrl}`
+    );
   }
 
   res.status(error.statusCode).json({

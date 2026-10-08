@@ -1,34 +1,34 @@
 import { motion } from 'framer-motion';
 import { useState } from 'react';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
+import { PRODUCT_FALLBACK_IMAGE, handleImageError } from '../../utils/imageFallback';
 
 export default function ImageGallery({ images = [] }) {
   const [active, setActive] = useState(0);
-  if (!images.length) {
-    return (
-      <div className="aspect-square bg-slate-100 rounded-2xl grid place-items-center text-slate-400">
-        No image
-      </div>
-    );
-  }
+  const normalizedImages = Array.isArray(images) && images.length > 0
+    ? images.map((img) => (typeof img === 'string' ? { url: img } : img))
+    : [{ url: PRODUCT_FALLBACK_IMAGE }];
 
-  const next = () => setActive((p) => (p + 1) % images.length);
-  const prev = () => setActive((p) => (p - 1 + images.length) % images.length);
+  const currentImage = normalizedImages[active]?.url || PRODUCT_FALLBACK_IMAGE;
+
+  const next = () => setActive((p) => (p + 1) % normalizedImages.length);
+  const prev = () => setActive((p) => (p - 1 + normalizedImages.length) % normalizedImages.length);
 
   return (
     <div className="space-y-3">
       <div className="relative aspect-square overflow-hidden rounded-2xl bg-slate-100 group">
         <motion.img
-          key={images[active]}
+          key={currentImage}
           initial={{ opacity: 0, scale: 1.05 }}
           animate={{ opacity: 1, scale: 1 }}
           transition={{ duration: 0.4 }}
-          src={images[active].url}
+          src={currentImage}
           alt="Product"
           className="w-full h-full object-cover"
+          onError={(e) => handleImageError(e, PRODUCT_FALLBACK_IMAGE)}
         />
 
-        {images.length > 1 && (
+        {normalizedImages.length > 1 && (
           <>
             <button
               onClick={prev}
@@ -46,17 +46,22 @@ export default function ImageGallery({ images = [] }) {
         )}
       </div>
 
-      {images.length > 1 && (
+      {normalizedImages.length > 1 && (
         <div className="grid grid-cols-5 gap-2">
-          {images.map((img, i) => (
+          {normalizedImages.map((img, i) => (
             <button
-              key={i}
+              key={img.url || i}
               onClick={() => setActive(i)}
               className={`relative aspect-square overflow-hidden rounded-lg border-2 transition ${
                 i === active ? 'border-brand-500' : 'border-transparent opacity-70 hover:opacity-100'
               }`}
             >
-              <img src={img.url} alt="" className="w-full h-full object-cover" />
+              <img
+                src={img.url || PRODUCT_FALLBACK_IMAGE}
+                alt=""
+                className="w-full h-full object-cover"
+                onError={(e) => handleImageError(e, PRODUCT_FALLBACK_IMAGE)}
+              />
             </button>
           ))}
         </div>

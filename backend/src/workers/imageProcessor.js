@@ -77,21 +77,37 @@ const { detectRisk } = require('../services/fraudDetection');
         throw new Error('No images processed successfully');
       }
 
+      // Average CV scores across images. Unavailable analysis (null score)
+      // is skipped — a missing visual estimate is never fabricated as 0.
+      const conditionScores = results
+        .map((r) => r.analysis?.conditionScore)
+        .filter((s) => typeof s === 'number' && Number.isFinite(s));
+      const damageScores = results
+        .map((r) => r.analysis?.damageScore)
+        .filter((s) => typeof s === 'number' && Number.isFinite(s));
       const avgCondition =
-        results.reduce((s, r) => s + (r.analysis?.conditionScore || 0), 0) / results.length;
+        conditionScores.length > 0
+          ? conditionScores.reduce((s, v) => s + v, 0) / conditionScores.length
+          : null;
       const avgDamage =
-        results.reduce((s, r) => s + (r.analysis?.damageScore || 0), 0) / results.length;
+        damageScores.length > 0
+          ? damageScores.reduce((s, v) => s + v, 0) / damageScores.length
+          : null;
+      const damageLevel =
+        avgDamage === null ? null : avgDamage >= 50 ? 'high' : avgDamage >= 25 ? 'medium' : 'low';
       const predictedCategory = results[0]?.analysis?.predictedCategory || 'Other';
+      const classificationConfidence = results[0]?.analysis?.classificationConfidence || 0;
 
       const category = await Category.findById(productData.category);
       const comparables = await Product.find({
         category: productData.category,
-        status: 'sold',
+        status: { $in: ['active', 'sold'] },
       })
         .sort({ createdAt: -1 })
-        .limit(20)
-        .select('price condition brand model');
+        .limit(30)
+        .select('price condition brand model originalPrice yearsUsed embedding');
 
+      // Local baseline calculation
       const priceRec = await calculateRecommendedPrice({
         category,
         brand: productData.brand,
@@ -99,41 +115,169 @@ const { detectRisk } = require('../services/fraudDetection');
         originalPrice: productData.originalPrice,
         yearsUsed: productData.yearsUsed,
         condition: productData.condition,
-        cvConditionScore: Math.round(avgCondition),
-        damageScore: Math.round(avgDamage),
+        cvConditionScore: avgCondition !== null ? Math.round(avgCondition) : null,
+        damageScore: avgDamage !== null ? Math.round(avgDamage) : null,
         specifications: productData.specifications,
         comparableListings: comparables,
       });
 
+      // ML Microservice integration: CLIP Embedding, kNN Price Estimation, Fraud Check
+      const mlClient = require('../services/mlClient');
+      const primaryUrl = results[0]?.url;
+      let clipEmbedding = [];
+
+      try {
+        if (primaryUrl) {
+          const emb = await mlClient.getEmbedding(primaryUrl);
+          if (emb && emb.length === 512) {
+            clipEmbedding = emb;
+          }
+        }
+      } catch (err) {
+        console.warn('[Worker] ML embedding extraction warning:', err.message);
+      }
+
+      // 1. ML Price Estimation
+      let finalSuggestedPrice = priceRec.recommendedPrice;
+      let finalPriceRange = {
+        min: priceRec.minPrice,
+        max: priceRec.maxPrice,
+        p25: priceRec.minPrice,
+        p75: priceRec.maxPrice,
+      };
+      let priceExplanation = priceRec.explanation;
+      let priceFactors = priceRec.factors;
+      let priceSource = priceRec.source;
+      let priceConfidence = priceRec.confidence;
+
+      try {
+        const mlPrice = await mlClient.estimatePrice({
+          listing: {
+            ...productData,
+            condition: productData.condition,
+            originalPrice: productData.originalPrice,
+            yearsUsed: productData.yearsUsed,
+            category: productData.category,
+          },
+          embedding: clipEmbedding.length === 512 ? clipEmbedding : null,
+          imageUrl: primaryUrl,
+          comparables: comparables.map((c) => ({
+            id: c._id.toString(),
+            price: c.price,
+            originalPrice: c.originalPrice,
+            condition: c.condition,
+            category: c.category?.toString(),
+            embedding: c.embedding,
+          })),
+        });
+
+        if (mlPrice && mlPrice.suggestedPrice) {
+          finalSuggestedPrice = mlPrice.suggestedPrice;
+          finalPriceRange = mlPrice.priceRange || finalPriceRange;
+          priceExplanation = mlPrice.explanation || priceExplanation;
+          priceFactors = mlPrice.factors || priceFactors;
+          priceSource = mlPrice.source || 'ml-service';
+          priceConfidence = mlPrice.confidence || priceConfidence;
+        }
+      } catch (err) {
+        console.warn('[Worker] ML price estimation warning:', err.message);
+      }
+
+      // 2. ML Multi-Modal Fraud Check
+      const candidateListingsForFraud = await Product.find({
+        _id: { $ne: productId },
+        status: { $in: ['active', 'sold', 'pendingReview'] },
+      })
+        .select('title seller price images embedding aiAnalysis.imageHashes createdAt')
+        .limit(100)
+        .lean();
+
+      let mlFraud = {
+        fraudScore: 0,
+        riskLevel: 'low',
+        isFlagged: false,
+        statusRecommendation: 'active',
+        fraudReasons: [],
+      };
+
+      try {
+        mlFraud = await mlClient.checkFraud({
+          listing: {
+            _id: productId,
+            title: productData.title,
+            price: productData.price,
+            sellerId: productData.seller || '',
+            perceptualHash: results[0]?.hash || '',
+            embedding: clipEmbedding,
+            imageUrl: primaryUrl,
+            images: results.map((r) => ({ url: r.url, hash: r.hash })),
+          },
+          candidateListings: candidateListingsForFraud.map((cand) => ({
+            _id: cand._id.toString(),
+            title: cand.title,
+            sellerId: cand.seller?.toString() || '',
+            embedding: cand.embedding || [],
+            imageHashes: cand.aiAnalysis?.imageHashes || (cand.images || []).map((i) => i.perceptualHash).filter(Boolean),
+          })),
+          categoryMedianPrice: finalSuggestedPrice,
+        });
+      } catch (err) {
+        console.warn('[Worker] ML fraud check warning:', err.message);
+      }
+
+      // If fraudScore >= 70 or ML recommended pendingReview, transition listing to pendingReview
+      const isHighRisk = mlFraud.fraudScore >= 70 || mlFraud.statusRecommendation === 'pendingReview';
+      const updatedStatus = isHighRisk ? 'pendingReview' : 'active';
+      const isFlagged = isHighRisk || mlFraud.isFlagged;
+      const flagReason = mlFraud.fraudReasons?.length > 0 ? mlFraud.fraudReasons.join('; ') : '';
+
       const product = await Product.findByIdAndUpdate(
         productId,
         {
+          embedding: clipEmbedding,
+          fraudScore: mlFraud.fraudScore,
+          fraudReasons: mlFraud.fraudReasons || [],
+          suggestedPrice: finalSuggestedPrice,
+          priceRange: finalPriceRange,
+          status: updatedStatus,
+          isFlagged,
+          ...(flagReason ? { flagReason } : {}),
           images: results.map((r, idx) => ({
             url: r.url,
             publicId: r.publicId,
             isPrimary: idx === 0,
             perceptualHash: r.hash,
             colorHistogram: r.colorHistogram,
-            productType: 'unknown', // Will be filled by ML service if needed
+            productType: 'unknown',
           })),
           aiAnalysis: {
             classification: {
               predictedCategory,
-              confidence: results[0]?.analysis?.classificationConfidence || 0,
+              confidence: classificationConfidence,
             },
-            conditionScore: Math.round(avgCondition),
-            damageScore: Math.round(avgDamage),
+            conditionScore: avgCondition !== null ? Math.round(avgCondition) : 0,
+            conditionConfidence: conditionScores.length > 0 ? 0.65 : 0.3,
+            damageScore: avgDamage !== null ? Math.round(avgDamage) : 0,
+            damageLevel,
+            damageConfidence: damageScores.length > 0 ? 0.6 : 0.3,
+            visualAnalysisAvailable: avgCondition !== null || avgDamage !== null,
             damageDescription: '',
             imageHashes: results.map((r) => r.hash).filter(Boolean),
             priceRecommendation: {
-              recommendedPrice: priceRec.recommendedPrice,
-              minPrice: priceRec.minPrice,
-              maxPrice: priceRec.maxPrice,
-              confidence: priceRec.confidence,
-              explanation: priceRec.explanation,
-              factors: priceRec.factors,
-              source: priceRec.source,
+              recommendedPrice: finalSuggestedPrice,
+              minPrice: finalPriceRange.min,
+              maxPrice: finalPriceRange.max,
+              confidence: priceConfidence,
+              explanation: priceExplanation,
+              factors: priceFactors,
+              source: priceSource,
               generatedAt: new Date(),
+            },
+            riskAssessment: {
+              riskScore: mlFraud.fraudScore,
+              riskLevel: mlFraud.riskLevel,
+              factors: mlFraud.fraudReasons || [],
+              assessedAt: new Date(),
             },
             lastAnalyzedAt: new Date(),
           },
@@ -146,13 +290,22 @@ const { detectRisk } = require('../services/fraudDetection');
       }
 
       // Extract CNN features for duplicate detection (async, non-blocking)
-      // This is done in background to not slow down the worker
+      // This is done in background to not slow down the worker. The visual
+      // risk assessment below waits for the main flow's riskAssessment write
+      // to complete first (mainFlowDone), so the supporting visual signal can
+      // never be overwritten by the main flow's product.save() — and can
+      // never overwrite it either.
+      let resolveMainFlowDone;
+      const mainFlowDone = new Promise((resolve) => {
+        resolveMainFlowDone = resolve;
+      });
+
       setImmediate(async () => {
         try {
           const axios = require('axios');
           const mlServiceUrl = process.env.ML_SERVICE_URL || 'http://localhost:5000';
           const mlClient = axios.create({ baseURL: mlServiceUrl, timeout: 15000 });
-          
+
           for (const image of images) {
             if (image.url) {
               try {
@@ -169,29 +322,102 @@ const { detectRisk } = require('../services/fraudDetection');
                   });
                 }
               } catch (e) {
+                // ML unavailability is a warning, never a fraud signal —
+                // listing creation does not depend on the ML service.
                 console.warn(`[Worker] CNN extraction failed for ${image.url}:`, e.message);
               }
             }
           }
+
+          // Wait until the main flow has finished writing its riskAssessment
+          // so the visual signal below cannot be lost or clobbered.
+          await mainFlowDone;
+
+          // Visual product fingerprint comparison (SCRUM-25): CNN features
+          // are compared crosswise against other listings. Supporting risk
+          // signal only — a visual match never blocks or flags on its own.
+          // Best-effort: failures here are warnings, never job failures.
+          try {
+            const { assessVisualSimilarity } = require('../services/fraudDetection');
+            const visual = await assessVisualSimilarity({ productId });
+            if (visual.available && visual.signal) {
+              // Atomic aggregation-pipeline update — appends the visual
+              // factor, increments the score and re-derives the level in a
+              // single server-side operation (no read-modify-write race).
+              await Product.updateOne(
+                { _id: productId },
+                [
+                  {
+                    $set: {
+                      'aiAnalysis.riskAssessment.factors': {
+                        $concatArrays: [
+                          { $ifNull: ['$aiAnalysis.riskAssessment.factors', []] },
+                          [visual.factor],
+                        ],
+                      },
+                      'aiAnalysis.riskAssessment.riskScore': {
+                        $min: [
+                          100,
+                          {
+                            $add: [
+                              { $ifNull: ['$aiAnalysis.riskAssessment.riskScore', 0] },
+                              visual.weight || 0,
+                            ],
+                          },
+                        ],
+                      },
+                    },
+                  },
+                  {
+                    $set: {
+                      'aiAnalysis.riskAssessment.riskLevel': {
+                        $cond: [
+                          { $gte: ['$aiAnalysis.riskAssessment.riskScore', 50] },
+                          'high',
+                          {
+                            $cond: [
+                              { $gte: ['$aiAnalysis.riskAssessment.riskScore', 25] },
+                              'medium',
+                              'low',
+                            ],
+                          },
+                        ],
+                      },
+                      'aiAnalysis.riskAssessment.assessedAt': new Date(),
+                    },
+                  },
+                ]
+              );
+            }
+          } catch (e) {
+            console.warn(`[Worker] Visual fingerprint comparison failed for ${productId}:`, e.message);
+          }
         } catch (e) {
-          console.warn('[Worker] Background CNN extraction failed:', e.message);
+          console.warn(`[Worker] Background CNN extraction failed for ${productId}:`, e.message);
         }
       });
 
-      const risk = await detectRisk({
-        product,
-        hashes: product.aiAnalysis.imageHashes,
-        aiAnalysis: product.aiAnalysis,
-      });
+      try {
+        const risk = await detectRisk({
+          product,
+          hashes: product.aiAnalysis.imageHashes,
+          aiAnalysis: product.aiAnalysis,
+        });
 
-      product.aiAnalysis.riskAssessment = {
-        riskScore: risk.riskScore,
-        riskLevel: risk.riskLevel,
-        factors: risk.factors,
-        assessedAt: new Date(),
-      };
+        product.aiAnalysis.riskAssessment = {
+          riskScore: risk.riskScore,
+          riskLevel: risk.riskLevel,
+          factors: risk.factors,
+          assessedAt: new Date(),
+        };
 
-      await product.save();
+        await product.save();
+      } finally {
+        // The main flow's riskAssessment write is done (or has failed) —
+        // the background visual block may proceed. Always resolve so it can
+        // never hang the worker's event loop.
+        resolveMainFlowDone();
+      }
 
       try {
         const { priceAnalysisQueue } = require('../queues');

@@ -127,7 +127,7 @@ function App() {
               <Route
                 path="/sell"
                 element={
-                  <ProtectedRoute>
+                  <ProtectedRoute roles={['seller', 'admin']}>
                     <SellProduct />
                   </ProtectedRoute>
                 }
@@ -135,7 +135,7 @@ function App() {
               <Route
                 path="/edit/:id"
                 element={
-                  <ProtectedRoute>
+                  <ProtectedRoute roles={['seller', 'admin']}>
                     <EditProduct />
                   </ProtectedRoute>
                 }
@@ -199,7 +199,7 @@ function App() {
               <Route
                 path="/my-products"
                 element={
-                  <ProtectedRoute>
+                  <ProtectedRoute roles={['seller', 'admin']}>
                     <MyProducts />
                   </ProtectedRoute>
                 }

@@ -72,11 +72,23 @@ const productSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ['active', 'sold', 'pending', 'rejected', 'removed', 'flagged'],
+      enum: ['active', 'sold', 'pending', 'rejected', 'removed', 'flagged', 'pendingReview'],
       default: 'active',
     },
     isFlagged: { type: Boolean, default: false },
     flagReason: { type: String, default: '' },
+
+    // CLIP (ViT-B/32) 512-D visual embedding & ML evaluation
+    embedding: { type: [Number], default: [] },
+    fraudScore: { type: Number, default: 0, min: 0, max: 100 },
+    fraudReasons: [{ type: String }],
+    suggestedPrice: { type: Number, default: 0 },
+    priceRange: {
+      min: { type: Number, default: 0 },
+      max: { type: Number, default: 0 },
+      p25: { type: Number, default: 0 },
+      p75: { type: Number, default: 0 },
+    },
 
     // Physical-product identity (serial/IMEI/VIN registry entry)
     productIdentity: {
@@ -120,7 +132,20 @@ const productSchema = new mongoose.Schema(
         confidence: { type: Number, default: 0 },
       },
       conditionScore: { type: Number, default: 0, min: 0, max: 100 },
+      // 0/absent condition score means NO visual evidence; 30-100 is the
+      // meaningful range (100 = like-new). confidence is the condition
+      // estimate's own confidence (never the system-wide confidence).
+      conditionConfidence: { type: Number, default: 0, min: 0, max: 1 },
       damageScore: { type: Number, default: 0, min: 0, max: 100 },
+      // HIGHER damageScore means MORE damage. level: low / medium / high.
+      // `null` must be a valid enum value — the `default: null` ("no visual
+      // evidence") is applied on create and Mongoose validates defaults
+      // against the enum, so excluding null would break every Product.create.
+      damageLevel: { type: String, enum: ['low', 'medium', 'high', null], default: null },
+      damageConfidence: { type: Number, default: 0, min: 0, max: 1 },
+      // Whether the visual pipeline produced real evidence for the stored
+      // condition/damage scores (false = insufficient evidence in the UI).
+      visualAnalysisAvailable: { type: Boolean, default: false },
       damageDescription: { type: String, default: '' },
       imageHashes: [{ type: String }], // Legacy - keeping for backward compatibility
       duplicateMatch: {

@@ -116,6 +116,27 @@ const isIdentifierEligible = async (category) => {
   return IDENTIFIER_CATEGORY_KEYWORDS.some((kw) => text.includes(kw));
 };
 
+// Identifier types only make sense for certain categories: IMEI identifies
+// phones, VIN identifies vehicles. Serial numbers are universal.
+const PHONE_TYPE_KEYWORDS = ['phone', 'mobile', 'smartphone'];
+const VEHICLE_TYPE_KEYWORDS = ['vehicle', 'car', 'motorbike', 'motorcycle', 'scooter'];
+
+/**
+ * Whether an identifierType is a sensible combination for the category.
+ * Serial numbers are valid for every eligible category; IMEI requires a
+ * phone-like category; VIN requires a vehicle-like category.
+ */
+const isIdentifierTypeValidForCategory = async (category, identifierType) => {
+  if (!identifierType || identifierType === 'serial') return true;
+  if (!['imei', 'vin'].includes(identifierType)) return false;
+  const Category = require('../models/Category');
+  const doc = await Category.findById(category).select('slug name').lean();
+  if (!doc) return false;
+  const text = `${doc.slug || ''} ${doc.name || ''}`.toLowerCase();
+  const keywords = identifierType === 'imei' ? PHONE_TYPE_KEYWORDS : VEHICLE_TYPE_KEYWORDS;
+  return keywords.some((kw) => text.includes(kw));
+};
+
 /**
  * Compute the chain hash for an event.
  * hash = SHA256(previousHash + eventType|ownerId|listingId|transactionId|timestamp)
@@ -196,6 +217,7 @@ module.exports = {
   safeCodeEqual,
   generateVerificationCode: () => issueVerificationCode().code,
   isIdentifierEligible,
+  isIdentifierTypeValidForCategory,
   computeEventHash,
   createProvenanceEvent,
   verifyProvenanceChain,

@@ -1,4 +1,4 @@
-const request = require('supertest');
+﻿const request = require('supertest');
 const mongoose = require('mongoose');
 const { app, server } = require('../server');
 const User = require('../models/User');
@@ -11,6 +11,15 @@ const extractToken = (res) => {
   return c ? c.split(';')[0].split('=')[1] : null;
 };
 
+
+// Minimum 3 images (multi-angle requirement): the given first image plus two
+// padding images whose hashes are pairwise >13 hamming distance from every
+// fixture hash in this suite (verified computationally).
+const threeImages = (first) => [
+  first,
+  { url: 'https://example.com/pad-1.jpg', publicId: 'pad-1', hash: 'c42a171d4bccc04d' },
+  { url: 'https://example.com/pad-2.jpg', publicId: 'pad-2', hash: '840074e0679d14f1' },
+];
 describe('Fraud Detection', () => {
   let sellerToken;
   let sellerUserId;
@@ -79,7 +88,7 @@ describe('Fraud Detection', () => {
           category: categoryId,
           brand: 'TestBrand',
           condition: 'good',
-          images: [{ url: 'https://example.com/img2.jpg', publicId: 'img2', hash: 'aabbccdd11223344' }],
+          images: threeImages({ url: 'https://example.com/img2.jpg', publicId: 'img2', hash: 'aabbccdd11223344' }),
           specifications: [],
         })
         .expect(201);
@@ -106,7 +115,7 @@ describe('Fraud Detection', () => {
           category: categoryId,
           brand: 'TestBrand',
           condition: 'good',
-          images: [{ url: 'https://example.com/img.jpg', publicId: 'img3', hash: 'hash-456' }],
+          images: threeImages({ url: 'https://example.com/img.jpg', publicId: 'img3', hash: 'hash-456' }),
           specifications: [],
         })
         .expect(201);
@@ -130,7 +139,7 @@ describe('Fraud Detection', () => {
           category: categoryId,
           brand: 'TestBrand',
           condition: 'good',
-          images: [{ url: 'https://example.com/img.jpg', publicId: 'img4', hash: 'hash-789' }],
+          images: threeImages({ url: 'https://example.com/img.jpg', publicId: 'img4', hash: 'hash-789' }),
           specifications: [],
         })
         .expect(201);
@@ -166,7 +175,7 @@ describe('Fraud Detection', () => {
           category: categoryId,
           brand: 'TestBrand',
           condition: 'good',
-          images: [{ url: 'https://example.com/img.jpg', publicId: 'img5', hash: 'hash-new' }],
+          images: threeImages({ url: 'https://example.com/img.jpg', publicId: 'img5', hash: 'hash-new' }),
           specifications: [],
         })
         .expect(201);

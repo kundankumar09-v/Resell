@@ -28,6 +28,7 @@ import { useCurrency } from '../contexts/CurrencyContext';
 import { SUPPORTED_CURRENCIES, convertPrice } from '../utils/currency';
 import LocationDetectButton from '../components/ui/LocationDetectButton';
 import useLocationDetector from '../hooks/useLocationDetector';
+import { imageGuidanceFor, MIN_IMAGES, RECOMMENDED_IMAGES, MAX_IMAGES } from '../utils/imageGuidance';
 
 const STEPS = [
   { id: 'photos', label: 'Photos', icon: Image },
@@ -183,8 +184,20 @@ export default function SellProduct() {
   const handleImageUpload = async (e) => {
     const files = Array.from(e.target.files || []);
     if (!files.length) return;
-    if (images.length + files.length > 8) {
-      toast.error('Maximum 8 images allowed');
+    if (images.length + files.length > MAX_IMAGES) {
+      toast.error(`Maximum ${MAX_IMAGES} images allowed`);
+      return;
+    }
+
+    // Client-side validation (the server re-validates): image type + size
+    const invalidType = files.find((f) => !f.type?.startsWith('image/'));
+    if (invalidType) {
+      toast.error(`"${invalidType.name}" is not an image file. Only image files are allowed.`);
+      return;
+    }
+    const tooLarge = files.find((f) => f.size > 10 * 1024 * 1024);
+    if (tooLarge) {
+      toast.error(`"${tooLarge.name}" is larger than 10MB. Please use a smaller image.`);
       return;
     }
 
@@ -242,7 +255,8 @@ export default function SellProduct() {
   };
 
   const canProceed = () => {
-    if (step === 0) return images.length > 0 && !uploading;
+    // Minimum 3 images (multi-angle requirement) — the server re-validates
+    if (step === 0) return images.length >= MIN_IMAGES && !uploading;
     if (step === 1) return form.title && form.description && form.price && form.category;
     return true;
   };
@@ -254,10 +268,24 @@ export default function SellProduct() {
     return formatPrice(converted, selectedCurrency);
   };
 
+  const applySuggestedPrice = () => {
+    if (!priceSuggestion || !priceSuggestion.suggestedPrice) return;
+    const inrPrice = priceSuggestion.suggestedPrice;
+    let converted = inrPrice;
+    if (rates && selectedCurrency !== 'INR') {
+      converted = convertPrice(inrPrice, 'INR', selectedCurrency, rates);
+    }
+    const val = String(Math.round(converted * 100) / 100);
+    setForm((prev) => ({ ...prev, price: val }));
+    toast.success(`Applied suggested price: ${currencyMeta.symbol}${val}`);
+  };
+
   const handleSubmit = async () => {
     if (loading) return; // prevent double click
-    if (!images.length) {
-      toast.error('Please upload at least one image');
+    if (images.length < MIN_IMAGES) {
+      toast.error(
+        `Please upload at least ${MIN_IMAGES} images: a front/main view, a back view and a side or detail view. Recommended: ${RECOMMENDED_IMAGES}.`
+      );
       return;
     }
     if (uploading) {
@@ -286,6 +314,23 @@ export default function SellProduct() {
     const yearsUsedNum = toInt(form.yearsUsed);
     if (Number.isNaN(yearsUsedNum)) { toast.error('Years used must be a valid number'); return; }
     if (yearsUsedNum < 0) { toast.error('Years used cannot be negative'); return; }
+
+    // Identifier validation (mirrors the backend normalization rules — the
+    // server re-validates and hashes; the raw value is never stored)
+    const rawIdentifier = form.identifier?.trim();
+    if (rawIdentifier) {
+      const cleaned = rawIdentifier.replace(/[\s\-_.]/g, '');
+      const type = form.identifierType;
+      if (type === 'imei' && !/^\d{15}$/.test(cleaned)) {
+        toast.error('IMEI must be exactly 15 digits'); return;
+      }
+      if (type === 'vin' && !/^[A-Z0-9]{17}$/.test(cleaned.toUpperCase())) {
+        toast.error('VIN must be exactly 17 letters and numbers'); return;
+      }
+      if (type === 'serial' && cleaned.length < 4) {
+        toast.error('Serial number must be at least 4 characters'); return;
+      }
+    }
 
     // Convert display currency to INR for storage
     const priceInINR = rates ? convertPrice(priceNum, selectedCurrency, 'INR', rates) : priceNum;
@@ -444,7 +489,27 @@ export default function SellProduct() {
                   <TiltCard maxTilt={4} className="card p-6">
                     <div className="mb-6">
                       <h3 className="font-display font-bold text-lg mb-1">Upload Photos</h3>
-                      <p className="text-sm text-slate-500">Add up to 8 high-quality images. The first image will be the cover.</p>
+                      <p className="text-sm text-slate-500">
+                        At least {MIN_IMAGES} images are required (recommended {RECOMMENDED_IMAGES}, max {MAX_IMAGES}). The first image will be the cover.
+                      </p>
+                    </div>
+
+                    {/* Multi-angle guidance — category-specific when possible */}
+                    <div className="mb-6 p-4 rounded-xl bg-slate-50 border border-slate-200">
+                      <div className="flex items-center gap-2 mb-2">
+                        <Camera className="w-4 h-4 text-brand-500" />
+                        <span className="text-sm font-medium text-slate-700">
+                          Recommended photos{selectedCategory ? ` for ${selectedCategory.name}` : ''}
+                        </span>
+                      </div>
+                      <ol className="grid sm:grid-cols-2 gap-x-4 gap-y-1.5 text-xs text-slate-600 list-decimal list-inside">
+                        {imageGuidanceFor(selectedCategory?.name).map((g, i) => (
+                          <li key={i}>{g}</li>
+                        ))}
+                      </ol>
+                      <p className="text-xs text-slate-400 mt-2">
+                        Multiple angles help buyers verify the item and speed up verification.
+                      </p>
                     </div>
 
                     <div
@@ -658,6 +723,30 @@ export default function SellProduct() {
                         </div>
                       </div>
                       <p className="text-xs text-slate-400 mt-2">Stored as INR. Price guidance will convert automatically.</p>
+
+                      {priceSuggestion && priceSuggestion.suggestedPrice > 0 && (
+                        <div className="mt-3 p-3.5 rounded-xl bg-brand-50/50 dark:bg-brand-500/10 border border-brand-200/60 dark:border-brand-500/20 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                          <div>
+                            <div className="flex items-center gap-1.5 text-xs font-semibold text-brand-700 dark:text-brand-300">
+                              <Sparkles className="w-3.5 h-3.5" />
+                              <span>AI Fair Price Recommendation</span>
+                            </div>
+                            <div className="text-sm font-bold text-slate-900 dark:text-slate-100 mt-0.5">
+                              {getDisplayPrice(priceSuggestion.suggestedPrice)}{' '}
+                              <span className="text-xs font-normal text-slate-500 dark:text-slate-400">
+                                (Range: {getDisplayPrice(priceSuggestion.priceRange?.min || priceSuggestion.priceRange?.p25)} – {getDisplayPrice(priceSuggestion.priceRange?.max || priceSuggestion.priceRange?.p75)})
+                              </span>
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={applySuggestedPrice}
+                            className="px-3.5 py-1.5 rounded-lg bg-brand-600 hover:bg-brand-700 text-white text-xs font-semibold shadow-sm transition-all self-start sm:self-center"
+                          >
+                            Use suggested price
+                          </button>
+                        </div>
+                      )}
                     </div>
 
                     {/* Product identity (only for supported categories) */}
@@ -666,7 +755,12 @@ export default function SellProduct() {
                         <div className="flex items-center justify-between mb-2">
                           <label className="text-sm font-medium flex items-center gap-1">
                             <Shield className="w-4 h-4 text-brand-500" />
-                            Serial / IMEI / VIN {identifierRequired ? '*' : '(optional)'}
+                            {form.identifierType === 'imei'
+                              ? 'IMEI'
+                              : form.identifierType === 'vin'
+                              ? 'VIN (vehicle identification number)'
+                              : 'Serial number'}{' '}
+                            {identifierRequired ? '*' : '(optional)'}
                           </label>
                           <span className="text-xs text-slate-400">Hashed securely — never shown publicly</span>
                         </div>
@@ -684,7 +778,13 @@ export default function SellProduct() {
                             type="text"
                             value={form.identifier}
                             onChange={(e) => setForm({ ...form, identifier: e.target.value })}
-                            placeholder="e.g. 356938035643809"
+                            placeholder={
+                              form.identifierType === 'imei'
+                                ? 'e.g. 356938035643809 (15 digits)'
+                                : form.identifierType === 'vin'
+                                ? 'e.g. 1HGBH41JXMN109186 (17 characters)'
+                                : 'e.g. SN-88291-A (min 4 characters)'
+                            }
                             className="input"
                           />
                         </div>
@@ -697,8 +797,25 @@ export default function SellProduct() {
                         )}
                         <p className="text-xs text-slate-400 mt-1">
                           Used to verify physical ownership and prevent resale of stolen goods.
+                          Spaces and dashes are ignored, and only a SHA-256 hash is stored — the
+                          raw value is never saved, logged, or shown to other users.
                         </p>
                       </div>
+                    )}
+
+                    {/* Identifier-free alternative (SCRUM-25): possession
+                        verification is an optional extra — sellers without an
+                        identifier can always continue normally, and a missing
+                        identifier is never treated as fraud. */}
+                    {!identifierRequired && !form.identifier?.trim() && (
+                      <p className="text-xs text-slate-400 mt-2 flex items-start gap-1.5">
+                        <Shield className="w-3.5 h-3.5 mt-0.5 shrink-0 text-slate-400" />
+                        <span>
+                          Don't have a product identifier? No problem — you can list normally
+                          without one. Optionally verify possession of the physical product from
+                          your listing page after publishing.
+                        </span>
+                      </p>
                     )}
 
                     <div>
@@ -806,15 +923,31 @@ export default function SellProduct() {
                       <AICard
                         icon={Camera}
                         title="Condition Score"
-                        value={`${aiAnalysis?.conditionScore ?? '—'}/100`}
+                        value={
+                          aiAnalysis?.conditionScore != null
+                            ? `${aiAnalysis.conditionScore}/100`
+                            : 'Insufficient evidence'
+                        }
                         color="from-emerald-500 to-teal-500"
                       />
                       <AICard
                         icon={Shield}
-                        title="Damage Score"
-                        value={`${aiAnalysis?.damageScore ?? '—'}/100`}
+                        title="Damage"
+                        value={
+                          aiAnalysis?.damageScore != null
+                            ? aiAnalysis.damageScore >= 50
+                              ? 'High'
+                              : aiAnalysis.damageScore >= 25
+                              ? 'Moderate'
+                              : 'Low'
+                            : 'Insufficient evidence'
+                        }
+                        subtitle={
+                          aiAnalysis?.damageScore != null
+                            ? `${aiAnalysis.damageScore}/100 · higher means more damage`
+                            : undefined
+                        }
                         color="from-amber-500 to-red-500"
-                        inverted
                       />
                       <AICard
                         icon={Tag}
@@ -824,7 +957,7 @@ export default function SellProduct() {
                       />
                       <AICard
                         icon={TrendingUp}
-                        title="Confidence"
+                        title="Classification Confidence"
                         value={`${Math.round((aiAnalysis?.classificationConfidence || 0) * 100)}%`}
                         color="from-blue-500 to-cyan-500"
                       />
@@ -858,6 +991,15 @@ export default function SellProduct() {
                             ))}
                           </div>
                         )}
+                        <div className="mt-3 pt-3 border-t border-slate-100 dark:border-slate-800 flex justify-end">
+                          <button
+                            type="button"
+                            onClick={applySuggestedPrice}
+                            className="px-4 py-2 rounded-xl bg-gradient-to-r from-brand-600 to-brand-500 text-white text-xs font-semibold shadow-sm hover:shadow transition-all"
+                          >
+                            Use suggested price
+                          </button>
+                        </div>
                       </motion.div>
                     )}
                     {priceSuggestion && priceSuggestion.suggestedPrice === 0 && (
@@ -1024,8 +1166,7 @@ export default function SellProduct() {
   );
 }
 
-function AICard({ icon: Icon, title, value, color, inverted }) {
-  const displayValue = inverted && value !== '—' ? `${100 - parseInt(value)}` : value;
+function AICard({ icon: Icon, title, value, color, subtitle }) {
   return (
     <motion.div
       initial={{ opacity: 0, scale: 0.95, y: 20 }}
@@ -1036,7 +1177,8 @@ function AICard({ icon: Icon, title, value, color, inverted }) {
         <Icon className="w-5 h-5 text-white" />
       </div>
       <p className="text-xs text-slate-500 mb-1">{title}</p>
-      <p className="font-display font-bold text-xl">{displayValue}</p>
+      <p className="font-display font-bold text-xl">{value}</p>
+      {subtitle && <p className="text-[10px] text-slate-400 mt-1">{subtitle}</p>}
     </motion.div>
   );
 }

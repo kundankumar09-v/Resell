@@ -1,14 +1,31 @@
 import { motion } from 'framer-motion';
-import { TrendingUp, Shield, AlertTriangle, Sparkles, Check } from 'lucide-react';
+import { TrendingUp, Shield, AlertTriangle, Sparkles, Check, Info } from 'lucide-react';
 import { getRiskColor, cn } from '../../utils/format';
 import useFormatPrice from '../../hooks/useFormatPrice';
 
-export default function AIAnalysisPanel({ aiAnalysis }) {
-  const formatPrice = useFormatPrice('USD');
+// Condition-score semantics (matches the backend contract):
+//   0/absent = no visual evidence; 30-100 is the meaningful range
+//   (100 = like-new, lower = worse).
+const conditionEvidenceAvailable = (aiAnalysis) =>
+  aiAnalysis?.visualAnalysisAvailable === true ||
+  (typeof aiAnalysis?.conditionScore === 'number' && aiAnalysis.conditionScore > 0);
+
+// Damage-score semantics: HIGHER means MORE damage. level is derived the
+// same way as the backend (>= 50 high, >= 25 medium, else low).
+const damageLevelOf = (score) => (score >= 50 ? 'high' : score >= 25 ? 'medium' : 'low');
+
+export default function AIAnalysisPanel({ aiAnalysis, currencyCode }) {
+  // Prices are displayed in the listing's currency (canonical backend value)
+  const formatPrice = useFormatPrice(currencyCode || 'USD');
 
   if (!aiAnalysis) return null;
   const rec = aiAnalysis.priceRecommendation;
   const risk = aiAnalysis.riskAssessment;
+  const conditionAvailable = conditionEvidenceAvailable(aiAnalysis);
+  const damageAvailable =
+    aiAnalysis?.visualAnalysisAvailable === true ||
+    (typeof aiAnalysis?.damageScore === 'number' && aiAnalysis.damageScore > 0);
+  const classification = aiAnalysis.classification;
 
   return (
     <motion.div
@@ -24,7 +41,8 @@ export default function AIAnalysisPanel({ aiAnalysis }) {
         <h3 className="font-display font-bold text-lg">AI Analysis</h3>
       </div>
 
-      {/* Price Recommendation */}
+      {/* Price Recommendation — its own pricing confidence (evidence-based,
+          from the backend's transparent multi-factor calculation) */}
       {rec && rec.recommendedPrice > 0 && (
         <div className="p-4 rounded-xl bg-gradient-to-br from-brand-50 to-accent-50 border border-brand-100">
           <div className="flex items-center justify-between mb-3">
@@ -33,7 +51,7 @@ export default function AIAnalysisPanel({ aiAnalysis }) {
               <span className="text-sm font-medium text-slate-700">Recommended Price</span>
             </div>
             <span className="badge bg-white border border-brand-200 text-brand-700">
-              {Math.round((rec.confidence || 0) * 100)}% confidence
+              {Math.round((rec.confidence || 0) * 100)}% pricing confidence
             </span>
           </div>
           <div className="flex items-baseline gap-3 mb-2">
@@ -64,22 +82,108 @@ export default function AIAnalysisPanel({ aiAnalysis }) {
         </div>
       )}
 
-      {/* Condition + Damage Scores */}
+      {/* Classification — its own confidence, clearly low when evidence is
+          weak. Never presented as the confidence of the whole AI system. */}
+      {classification?.predictedCategory && (
+        <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 flex items-center justify-between gap-3">
+          <div>
+            <div className="text-xs font-medium text-slate-600 mb-0.5">Predicted category</div>
+            <div className="text-sm font-bold text-slate-900">
+              {classification.predictedCategory}
+            </div>
+          </div>
+          <span
+            className={cn(
+              'badge whitespace-nowrap',
+              (classification.confidence || 0) >= 0.6
+                ? 'bg-emerald-100 text-emerald-700'
+                : (classification.confidence || 0) >= 0.4
+                ? 'bg-amber-100 text-amber-700'
+                : 'bg-slate-100 text-slate-500'
+            )}
+          >
+            {Math.round((classification.confidence || 0) * 100)}% classification confidence
+          </span>
+        </div>
+      )}
+
+      {/* Condition + Damage — semantic labels, scores where useful, and an
+          explicit "insufficient evidence" state instead of fake precision. */}
       <div className="grid grid-cols-2 gap-3">
-        <ScoreBar
-          label="Visual Condition"
-          score={aiAnalysis.conditionScore || 0}
-          color="from-emerald-500 to-teal-500"
-        />
-        <ScoreBar
-          label="Damage Score"
-          score={aiAnalysis.damageScore || 0}
-          color="from-amber-500 to-red-500"
-          inverted
-        />
+        <div className="p-3 rounded-xl bg-slate-50">
+          <div className="flex justify-between items-center mb-2">
+            <span className="text-xs font-medium text-slate-600">Visual condition</span>
+            <span className="text-sm font-bold text-slate-900">
+              {conditionAvailable ? `${aiAnalysis.conditionScore}/100` : '—'}
+            </span>
+          </div>
+          {conditionAvailable ? (
+            <>
+              <div className="h-2 bg-slate-200 rounded-full overflow-hidden">
+                <motion.div
+                  initial={{ width: 0 }}
+                  animate={{ width: `${aiAnalysis.conditionScore}%` }}
+                  transition={{ duration: 1, delay: 0.4 }}
+                  className="h-full bg-gradient-to-r from-emerald-500 to-teal-500"
+                />
+              </div>
+              <div className="text-[10px] text-slate-400 mt-1.5">
+                Estimated from image quality · {Math.round((aiAnalysis.conditionConfidence ?? 0.65) * 100)}% confidence
+              </div>
+            </>
+          ) : (
+            <div className="text-[10px] text-slate-400 flex items-start gap-1">
+              <Info className="w-3 h-3 mt-0.5 flex-shrink-0" />
+              <span>Insufficient visual evidence for a condition estimate</span>
+            </div>
+          )}
+        </div>
+        <div className="p-3 rounded-xl bg-slate-50">
+          <div className="flex justify-between items-center mb-2">
+            <span className="text-xs font-medium text-slate-600">Damage</span>
+            <span
+              className={cn(
+                'badge capitalize',
+                !damageAvailable && 'bg-slate-100 text-slate-500',
+                damageAvailable && damageLevelOf(aiAnalysis.damageScore) === 'low' && 'bg-emerald-100 text-emerald-700',
+                damageAvailable && damageLevelOf(aiAnalysis.damageScore) === 'medium' && 'bg-amber-100 text-amber-700',
+                damageAvailable && damageLevelOf(aiAnalysis.damageScore) === 'high' && 'bg-red-100 text-red-700'
+              )}
+            >
+              {!damageAvailable
+                ? 'No evidence'
+                : damageLevelOf(aiAnalysis.damageScore) === 'low'
+                ? 'Low'
+                : damageLevelOf(aiAnalysis.damageScore) === 'medium'
+                ? 'Moderate'
+                : 'High'}
+            </span>
+          </div>
+          {damageAvailable ? (
+            <>
+              <div className="h-2 bg-slate-200 rounded-full overflow-hidden">
+                <motion.div
+                  initial={{ width: 0 }}
+                  animate={{ width: `${aiAnalysis.damageScore}%` }}
+                  transition={{ duration: 1, delay: 0.4 }}
+                  className="h-full bg-gradient-to-r from-amber-500 to-red-500"
+                />
+              </div>
+              <div className="text-[10px] text-slate-400 mt-1.5">
+                {aiAnalysis.damageScore}/100 · higher means more damage · {Math.round((aiAnalysis.damageConfidence ?? 0.6) * 100)}% confidence
+              </div>
+            </>
+          ) : (
+            <div className="text-[10px] text-slate-400 flex items-start gap-1">
+              <Info className="w-3 h-3 mt-0.5 flex-shrink-0" />
+              <span>Insufficient visual evidence for a damage estimate</span>
+            </div>
+          )}
+        </div>
       </div>
 
-      {/* Risk Assessment */}
+      {/* Risk Assessment — internal moderation signal, visible to the
+          listing owner only (the API strips it for other viewers) */}
       {risk && (
         <div className="p-4 rounded-xl bg-slate-50 border border-slate-200">
           <div className="flex items-center justify-between mb-3">
@@ -116,25 +220,5 @@ export default function AIAnalysisPanel({ aiAnalysis }) {
         </div>
       )}
     </motion.div>
-  );
-}
-
-function ScoreBar({ label, score, color, inverted }) {
-  const value = inverted ? 100 - score : score;
-  return (
-    <div className="p-3 rounded-xl bg-slate-50">
-      <div className="flex justify-between items-center mb-2">
-        <span className="text-xs font-medium text-slate-600">{label}</span>
-        <span className="text-sm font-bold text-slate-900">{score}</span>
-      </div>
-      <div className="h-2 bg-slate-200 rounded-full overflow-hidden">
-        <motion.div
-          initial={{ width: 0 }}
-          animate={{ width: `${value}%` }}
-          transition={{ duration: 1, delay: 0.4 }}
-          className={`h-full bg-gradient-to-r ${color}`}
-        />
-      </div>
-    </div>
   );
 }

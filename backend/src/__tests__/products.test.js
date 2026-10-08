@@ -1,4 +1,4 @@
-const request = require('supertest');
+﻿const request = require('supertest');
 const mongoose = require('mongoose');
 const { app, server } = require('../server');
 const User = require('../models/User');
@@ -11,6 +11,15 @@ const extractToken = (res) => {
   return c ? c.split(';')[0].split('=')[1] : null;
 };
 
+
+// Minimum 3 images (multi-angle requirement): the given first image plus two
+// padding images whose hashes are pairwise >13 hamming distance from every
+// fixture hash in this suite (verified computationally).
+const threeImages = (first) => [
+  first,
+  { url: 'https://example.com/pad-1.jpg', publicId: 'pad-1', hash: 'c42a171d4bccc04d' },
+  { url: 'https://example.com/pad-2.jpg', publicId: 'pad-2', hash: '840074e0679d14f1' },
+];
 describe('Product Routes', () => {
   let userToken;
   let sellerToken;
@@ -169,7 +178,7 @@ describe('Product Routes', () => {
           brand: 'BrandX',
           condition: 'like-new',
           yearsUsed: 1,
-          images: [{ url: 'https://example.com/img.jpg', publicId: 'img123', hash: 'abc123' }],
+          images: threeImages({ url: 'https://example.com/img.jpg', publicId: 'img123', hash: 'abc123' }),
           specifications: [{ key: 'Color', value: 'Red' }],
         })
         .expect(201);
@@ -177,6 +186,23 @@ describe('Product Routes', () => {
       expect(res.body.success).toBe(true);
       expect(res.body.product.title).toBe('New Product');
       expect(res.body.product.aiAnalysis).toBeDefined();
+    });
+
+    it('should reject listings with fewer than three images', async () => {
+      const res = await request(app)
+        .post('/api/products')
+        .set('Authorization', `Bearer ${sellerToken}`)
+        .send({
+          title: 'Two-view Product',
+          description: 'A product with too few images',
+          price: 200,
+          category: categoryId,
+          images: threeImages({ url: 'https://example.com/img.jpg', publicId: 'img123', hash: 'abc123' }).slice(0, 2),
+        })
+        .expect(400);
+
+      expect(res.body.code).toBe('TOO_FEW_IMAGES');
+      expect(await Product.countDocuments({ title: 'Two-view Product' })).toBe(0);
     });
 
     it('should reject creation without auth', async () => {
