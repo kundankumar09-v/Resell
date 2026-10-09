@@ -9,6 +9,12 @@ Working conventions for AI agents and contributors on this repo.
 - New bugs discovered during a story go to a `SCRUM-30+` candidate list — do **not** fix them inside an unrelated story's commit.
 - One commit per story. Run the test suites before committing and report pass/fail counts.
 
+### SCRUM-27 semantics note
+
+Implemented per platform semantics: 409 at upload gate only; createProduct stores flat hash list + feeds detectRisk(). Do NOT add a creation-time hard block — deliberate semantic change requiring updates to fraud.test.js / identity.test.js per README §7.4.
+
+Candidate note: createProduct trusts client-echoed hash/mirrorHash — now implemented as SCRUM-31 (mark resolved when the session completes).
+
 ## Commit hygiene
 
 - Commit ONLY files touched by the current story, with explicit `git add <paths>`.
