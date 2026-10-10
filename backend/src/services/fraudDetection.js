@@ -30,7 +30,11 @@ const clamp = (val, min, max) => Math.max(min, Math.min(max, val));
 // Threshold of 12 validated against real photographs: catches all crop/recompress
 // variants (max observed distance = 12) while producing zero false positives on
 // same-category different products (min observed distance = 30, margin = 18 points).
-const HASH_SIMILARITY_THRESHOLD = 12;
+// Single source of truth: read from HASH_SIMILARITY_THRESHOLD env var
+// (defaulted in config/validateEnv.js) — the upload/edit gate threshold
+// (constants.js DUPLICATE_HASH_THRESHOLD) consumes the same env var.
+const HASH_SIMILARITY_THRESHOLD =
+  Number(process.env.HASH_SIMILARITY_THRESHOLD) || 12;
 
 // Product-identity fraud signals (from identityVerification.js), combined
 // with the existing risk score below.

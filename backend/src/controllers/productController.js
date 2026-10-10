@@ -157,11 +157,10 @@ const getProduct = async (req, res, next) => {
 // Distance 13+: genuinely different images.
 // Threshold of 12 matches fraudDetection.js HASH_SIMILARITY_THRESHOLD and is
 // validated against real photographs with a margin of 18 points to the next
-// same-category different-product minimum distance (30). The
-// DUPLICATE_HASH_THRESHOLD env var (defaulted in config/validateEnv.js)
-// overrides the shared default at runtime.
-const DUPLICATE_HASH_THRESHOLD =
-  Number(process.env.DUPLICATE_HASH_THRESHOLD) || SHARED_LIMITS.DUPLICATE_HASH_THRESHOLD;
+// same-category different-product minimum distance (30). Both share the
+// single HASH_SIMILARITY_THRESHOLD env var (defaulted in
+// config/validateEnv.js), consumed via SHARED_LIMITS.DUPLICATE_HASH_THRESHOLD.
+const DUPLICATE_HASH_THRESHOLD = SHARED_LIMITS.DUPLICATE_HASH_THRESHOLD;
 
 const uploadImages = async (req, res, next) => {
   try {

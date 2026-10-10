@@ -17,7 +17,7 @@ const fs = require('fs');
 const path = require('path');
 const { hammingDistance } = require('../services/imageHash');
 
-const THRESHOLD = 12;
+const THRESHOLD = Number(process.env.HASH_SIMILARITY_THRESHOLD) || 12;
 
 function loadReport() {
   const reportPath = path.join(__dirname, '../../duplicate-fixture-report.json');
