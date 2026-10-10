@@ -680,7 +680,7 @@ riskScore = clamp(sum of all signals, 0, 100)
 Risk level: < 25 -> low | 25-49 -> medium | >= 50 -> high
 ```
 
-The score and `factors[]` array are stored in `product.aiAnalysis.riskScore` and displayed prominently in the product detail page.
+The score and `factors[]` array are stored in `product.aiAnalysis.riskAssessment.riskScore` and `product.aiAnalysis.riskAssessment.factors` (schema in section 11) and displayed prominently in the product detail page.
 
 ---
 
@@ -858,8 +858,10 @@ Triggered on product creation. Calculates fair market price:
 ```
 Redis available:   Jobs queued in Redis, workers process asynchronously
 Redis unavailable: "[Queue] Redis unavailable — queues disabled"
-                   Jobs run synchronously inline (development mode)
+                   Jobs are skipped and logged (no inline fallback)
 ```
+
+When Redis is unavailable, background AI analysis jobs are skipped and logged — listings still function normally without AI analysis.
 
 ---
 
@@ -903,9 +905,12 @@ aiAnalysis: {
   categoryConfidence: Number,   // 0-1 confidence
 
   // Fraud risk
-  riskScore: Number,            // 0-100 aggregated fraud risk
-  riskLevel: String,            // 'low' | 'medium' | 'high'
-  riskFactors: [String],        // human-readable explanation of each signal
+  riskAssessment: {
+    riskScore: Number,          // 0-100 aggregated fraud risk
+    riskLevel: String,          // 'low' | 'medium' | 'high'
+    factors: [String],          // human-readable explanation of each signal
+    assessedAt: Date,           // when the assessment was last computed
+  },
 
   // Timestamps
   processedAt: Date,
@@ -1146,9 +1151,12 @@ Response:
     "price": 85000,
     "status": "active",
     "aiAnalysis": {
-      "riskScore": 5,
-      "riskLevel": "low",
-      "riskFactors": [],
+      "riskAssessment": {
+        "riskScore": 5,
+        "riskLevel": "low",
+        "factors": [],
+        "assessedAt": "2025-01-01T00:00:00.000Z"
+      },
       "conditionScore": 88,
       "conditionLabel": "like-new",
       "damageScore": 12,
