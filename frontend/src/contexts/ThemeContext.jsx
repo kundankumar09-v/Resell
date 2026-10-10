@@ -55,8 +55,12 @@ export function ThemeProvider({ children }) {
     setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'));
   }, [setTheme]);
 
-  // Initial apply without transitions
+  // Initial apply without transitions; persist the resolved theme so the
+  // preference survives reloads even before the user toggles manually.
   useEffect(() => {
+    if (localStorage.getItem(STORAGE_KEY) !== theme) {
+      localStorage.setItem(STORAGE_KEY, theme);
+    }
     applyTheme(theme, false);
   }, [theme, applyTheme]);
 
