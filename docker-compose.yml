@@ -46,8 +46,8 @@ services:
       - PORT=8000
       - CLIP_MODEL_NAME=ViT-B/32
       - CLIP_PRETRAINED=openai
-      - FRAUD_THRESHOLD_HIGH=70
-      - FRAUD_THRESHOLD_MEDIUM=30
+      - FRAUD_HIGH_THRESHOLD=0.60
+      - FRAUD_MEDIUM_THRESHOLD=0.30
     deploy:
       resources:
         limits:
