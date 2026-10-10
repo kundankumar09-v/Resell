@@ -32,15 +32,55 @@ async function refinePrice(productId) {
     comparableListings: comparables,
   });
 
+  // Same ML blend as imageProcessor — a later local-only recompute must not
+  // silently clobber the ML-informed price the upload worker already stored.
+  let price = priceRec;
+  try {
+    const mlClient = require('../services/mlClient');
+    const primaryUrl = product.images?.[0]?.url;
+    let embedding = null;
+    if (product.embedding && product.embedding.length === 512) {
+      embedding = product.embedding;
+    } else if (primaryUrl) {
+      embedding = await mlClient.getEmbedding(primaryUrl);
+    }
+    const mlPrice = await mlClient.estimatePrice({
+      listing: {
+        title: product.title,
+        brand: product.brand,
+        model: product.model,
+        originalPrice: product.originalPrice,
+        yearsUsed: product.yearsUsed,
+        condition: product.condition,
+        category: product.category?._id,
+      },
+      embedding,
+      imageUrl: primaryUrl,
+      comparables: comparables.map((c) => ({
+        id: c._id.toString(),
+        price: c.price,
+        originalPrice: c.originalPrice,
+        condition: c.condition,
+        category: c.category?.toString(),
+        embedding: c.embedding,
+      })),
+    });
+    if (mlPrice) {
+      price = mlClient.blendWithMl(priceRec, mlPrice);
+    }
+  } catch (err) {
+    console.warn(`[PriceWorker] ML price blend failed, keeping local baseline: ${err.message}`);
+  }
+
   await Product.findByIdAndUpdate(productId, {
     'aiAnalysis.priceRecommendation': {
-      recommendedPrice: priceRec.recommendedPrice,
-      minPrice: priceRec.minPrice,
-      maxPrice: priceRec.maxPrice,
-      confidence: priceRec.confidence,
-      explanation: priceRec.explanation,
-      factors: priceRec.factors,
-      source: priceRec.source,
+      recommendedPrice: price.recommendedPrice,
+      minPrice: price.minPrice,
+      maxPrice: price.maxPrice,
+      confidence: price.confidence,
+      explanation: price.explanation,
+      factors: price.factors,
+      source: price.source,
       generatedAt: product.aiAnalysis?.priceRecommendation?.generatedAt || new Date(),
       refinedAt: new Date(),
     },

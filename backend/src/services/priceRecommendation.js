@@ -195,7 +195,13 @@ const calculateRecommendedPrice = async ({
       const blended = recommendedPrice * 0.7 + medianComparable * 0.3;
       factors.push(`Blended with median of ${similarPrices.length} same-condition comparables`);
       recommendedPrice = blended;
-      confidence += 0.1;
+      // Confidence from comparables is granted ONCE: when an original price
+      // exists, this refinement is the comparables evidence (market
+      // corroboration of an independent depreciation estimate). When there
+      // was NO original price the median-of-comparables base path above
+      // already granted the comparables bump — granting it again here would
+      // double-count the same data.
+      if (original > 0) confidence += 0.1;
     }
   }
 

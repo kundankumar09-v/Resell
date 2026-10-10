@@ -127,6 +127,78 @@ describe('Service Unit Tests', () => {
       });
       expect(result.recommendedPrice).toBeGreaterThan(0);
     });
+
+    it('grants the comparables confidence bump on exactly one path (no original price)', async () => {
+      const comparables = [
+        { price: 100, condition: 'good' },
+        { price: 120, condition: 'good' },
+        { price: 90, condition: 'good' },
+        { price: 110, condition: 'good' },
+      ];
+      // No original price: base 0.5 + 0.1 from the comparables base path.
+      // The same-condition refinement must NOT add another +0.1, so 0.6.
+      const result = await calculateRecommendedPrice({
+        category: null, originalPrice: 0, condition: 'good',
+        comparableListings: comparables,
+      });
+      expect(result.confidence).toBe(0.6);
+    });
+
+    it('grants the comparables confidence bump via refinement when an original price exists', async () => {
+      const comparables = [
+        { price: 100, condition: 'good' },
+        { price: 120, condition: 'good' },
+        { price: 90, condition: 'good' },
+        { price: 110, condition: 'good' },
+      ];
+      // Depreciation base 0.5 + 0.2, then comparables corroborate via the
+      // refinement blend (+0.1) — total 0.8. The comparables evidence is
+      // counted once even though the same listing array is passed in.
+      const result = await calculateRecommendedPrice({
+        category: { name: 'Electronics' }, originalPrice: 1000,
+        yearsUsed: 1, condition: 'good',
+        comparableListings: comparables,
+      });
+      expect(result.confidence).toBe(0.8);
+    });
+  });
+
+  // --- mlClient.blendWithMl ---
+  describe('mlClient.blendWithMl', () => {
+    const { blendWithMl, DEFAULT_ML_BLEND_WEIGHT } = require('../services/mlClient');
+
+    it('blends local heuristic and ML estimate at the configured weight', () => {
+      const local = { recommendedPrice: 100, minPrice: 85, maxPrice: 115, confidence: 0.6, factors: ['a'], explanation: 'e', source: 'heuristic' };
+      const ml = { suggestedPrice: 200, priceRange: { min: 170, max: 230 }, explanation: 'ml' };
+      const out = blendWithMl(local, ml, 0.5);
+      expect(out.recommendedPrice).toBe(150);
+      expect(out.minPrice).toBe(127.5);
+      expect(out.maxPrice).toBe(172.5);
+      expect(out.source).toBe('hybrid');
+      expect(out.confidence).toBe(0.6);
+    });
+
+    it('defaults to the ML weight env (0.7)', () => {
+      const local = { recommendedPrice: 100, minPrice: 85, maxPrice: 115, factors: [] };
+      const ml = { suggestedPrice: 200, priceRange: { min: 170, max: 230 } };
+      expect(DEFAULT_ML_BLEND_WEIGHT).toBe(0.7);
+      expect(blendWithMl(local, ml).recommendedPrice).toBe(170);
+    });
+
+    it('returns local baseline untouched when ML estimate is missing', () => {
+      const local = { recommendedPrice: 100, minPrice: 85, maxPrice: 115, confidence: 0.6, factors: [], source: 'heuristic' };
+      const out = blendWithMl(local, { suggestedPrice: null });
+      expect(out.source).toBe('heuristic');
+      expect(out.recommendedPrice).toBe(100);
+    });
+
+    it('returns ML estimate alone when no local baseline exists', () => {
+      const local = { recommendedPrice: 0, minPrice: 0, maxPrice: 0, confidence: 0 };
+      const ml = { suggestedPrice: 200, priceRange: { min: 170, max: 230 }, explanation: 'ml-only' };
+      const out = blendWithMl(local, ml, 0.7);
+      expect(out.source).toBe('ml-service');
+      expect(out.recommendedPrice).toBe(200);
+    });
   });
 
   // --- trustScore (requires DB) ---

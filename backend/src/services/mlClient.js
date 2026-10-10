@@ -113,11 +113,73 @@ async function estimatePrice({ listing, embedding = null, imageUrl = null, compa
   }
 }
 
+// Share of the final price given to the ML estimate when both it and the
+// local heuristic are available (0..1). 0.7 = 70% ML / 30% local heuristic.
+const DEFAULT_ML_BLEND_WEIGHT = Number(process.env.ML_BLEND_WEIGHT ?? 0.7);
+
+const clampWeight = (w) => {
+  const n = Number(w);
+  if (!Number.isFinite(n)) return clampWeight(DEFAULT_ML_BLEND_WEIGHT);
+  return Math.max(0, Math.min(1, n));
+};
+
+/**
+ * Weighted blend of the transparent local heuristic price with the ML kNN
+ * estimate. Both imageProcessor and priceAnalyzer use this so the ML value
+ * is never wholesale-overridden nor silently clobbered by a later local-only
+ * recompute. Falls back to whichever side is available.
+ *
+ * @param {Object} local  priceRecommendation-calulateRecommendedPrice result
+ * @param {Object} ml     ml-service /price-estimate response (suggestedPrice, priceRange)
+ * @param {number} [weight] ML share, defaults to ML_BLEND_WEIGHT (0.7)
+ */
+function blendWithMl(local, ml, weight = DEFAULT_ML_BLEND_WEIGHT) {
+  const w = clampWeight(weight);
+  const mlPrice = ml && (typeof ml.suggestedPrice === 'number' || typeof ml.suggestedPrice === 'string')
+    ? Number(ml.suggestedPrice)
+    : NaN;
+  const hasMl = Number.isFinite(mlPrice) && mlPrice > 0;
+
+  if (!hasMl) {
+    if (!local) return null;
+    return { ...local, source: local.source || 'heuristic' };
+  }
+  if (!local || !(local.recommendedPrice > 0)) {
+    return {
+      recommendedPrice: mlPrice,
+      minPrice: ml.priceRange?.min ?? 0,
+      maxPrice: ml.priceRange?.max ?? 0,
+      confidence: ml.confidence ?? 0,
+      explanation: ml.explanation || 'Price estimated by ML (no local baseline available)',
+      factors: ml.factors || [],
+      source: 'ml-service',
+    };
+  }
+
+  const blend = (a, b) => (a == null ? b : b == null ? a : a * (1 - w) + b * w);
+  return {
+    recommendedPrice: local.recommendedPrice * (1 - w) + mlPrice * w,
+    minPrice: blend(local.minPrice, ml.priceRange?.min),
+    maxPrice: blend(local.maxPrice, ml.priceRange?.max),
+    confidence: local.confidence,
+    explanation: `Blended ${Math.round(w * 100)}% ML / ${Math.round((1 - w) * 100)}% local heuristic${
+      ml.explanation ? ' — ' + ml.explanation : ''
+    }`,
+    factors: [
+      ...(Array.isArray(local.factors) ? local.factors : []),
+      `ML kNN estimate ${mlPrice.toFixed(2)} blended at ${Math.round(w * 100)}% weight`,
+    ],
+    source: 'hybrid',
+  };
+}
+
 module.exports = {
   checkHealth,
   getEmbedding,
   getBatchEmbeddings,
   checkFraud,
   estimatePrice,
+  blendWithMl,
+  DEFAULT_ML_BLEND_WEIGHT,
   ML_SERVICE_URL,
 };

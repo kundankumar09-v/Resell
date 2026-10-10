@@ -142,7 +142,9 @@ const { detectRisk } = require('../services/fraudDetection');
         console.warn('[Worker] ML embedding extraction warning:', err.message);
       }
 
-      // 1. ML Price Estimation
+      // 1. ML Price Estimation — weighted blend with the local heuristic so
+      // the transparent baseline is never wholesale-overridden.
+      const { blendWithMl } = require('../services/mlClient');
       let finalSuggestedPrice = priceRec.recommendedPrice;
       let finalPriceRange = {
         min: priceRec.minPrice,
@@ -176,13 +178,19 @@ const { detectRisk } = require('../services/fraudDetection');
           })),
         });
 
-        if (mlPrice && mlPrice.suggestedPrice) {
-          finalSuggestedPrice = mlPrice.suggestedPrice;
-          finalPriceRange = mlPrice.priceRange || finalPriceRange;
-          priceExplanation = mlPrice.explanation || priceExplanation;
-          priceFactors = mlPrice.factors || priceFactors;
-          priceSource = mlPrice.source || 'ml-service';
-          priceConfidence = mlPrice.confidence || priceConfidence;
+        if (mlPrice) {
+          const blended = blendWithMl(priceRec, mlPrice);
+          finalSuggestedPrice = blended.recommendedPrice;
+          finalPriceRange = {
+            min: blended.minPrice,
+            max: blended.maxPrice,
+            p25: blended.minPrice,
+            p75: blended.maxPrice,
+          };
+          priceExplanation = blended.explanation;
+          priceFactors = blended.factors;
+          priceSource = blended.source;
+          priceConfidence = blended.confidence;
         }
       } catch (err) {
         console.warn('[Worker] ML price estimation warning:', err.message);
