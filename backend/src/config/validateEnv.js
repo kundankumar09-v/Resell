@@ -12,7 +12,8 @@ const REQUIRED_IN_PRODUCTION = [
 const OPTIONAL_WITH_DEFAULTS = {
   PORT: '5000',
   NODE_ENV: 'development',
-  JWT_EXPIRE: '7d',
+  JWT_ACCESS_EXPIRE: '15m',
+  JWT_REFRESH_EXPIRE: '7d',
   REDIS_URL: 'redis://localhost:6379',
   ML_SERVICE_URL: 'http://localhost:8000',
   HASH_SIMILARITY_THRESHOLD: '12',

@@ -89,7 +89,8 @@ services:
       - STRIPE_PUBLISHABLE_KEY=${STRIPE_PUBLISHABLE_KEY}
       # Auth
       - JWT_SECRET=${JWT_SECRET}
-      - JWT_EXPIRE=7d
+      - JWT_ACCESS_EXPIRE=${JWT_ACCESS_EXPIRE:-15m}
+      - JWT_REFRESH_EXPIRE=${JWT_REFRESH_EXPIRE:-7d}
     depends_on:
       mongodb:
         condition: service_healthy

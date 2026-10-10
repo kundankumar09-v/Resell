@@ -2,15 +2,34 @@ const jwt = require('jsonwebtoken');
 
 const crypto = require('crypto');
 
+// Access and refresh tokens have separate lifetimes:
+//   - access:  short (default 15m) — reduces the blast radius of a leaked token
+//   - refresh: long  (default 7d)  — used only by /api/auth/refresh
+// JWT_EXPIRE is still honored as a backward-compatible fallback for the access
+// token so existing deployments that set only JWT_EXPIRE keep working.
+const accessExpire = () =>
+  process.env.JWT_ACCESS_EXPIRE || process.env.JWT_EXPIRE || '15m';
+const refreshExpire = () => process.env.JWT_REFRESH_EXPIRE || '7d';
+
+// Parse a jsonwebtoken-style duration ("15m", "7d", "3600s") to milliseconds
+// so the cookie Max-Age stays in lockstep with the token lifetime.
+const parseDurationMs = (value, fallbackMs) => {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  const match = /^(\d+)\s*([smhd])$/.exec(String(value || '').trim());
+  if (!match) return fallbackMs;
+  const unit = { s: 1000, m: 60 * 1000, h: 60 * 60 * 1000, d: 24 * 60 * 60 * 1000 }[match[2]];
+  return Number(match[1]) * unit;
+};
+
 const generateToken = (payload) => {
   return jwt.sign({ ...payload, jti: crypto.randomUUID() }, process.env.JWT_SECRET, {
-    expiresIn: process.env.JWT_EXPIRE || '1h',
+    expiresIn: accessExpire(),
   });
 };
 
 const generateRefreshToken = (payload) => {
   return jwt.sign({ ...payload, jti: crypto.randomUUID() }, process.env.JWT_SECRET, {
-    expiresIn: '7d',
+    expiresIn: refreshExpire(),
   });
 };
 
@@ -43,7 +62,7 @@ const setTokenCookies = (res, accessToken, refreshToken) => {
     httpOnly: true,
     secure: isProduction,
     sameSite,
-    maxAge: 60 * 60 * 1000, // 1 hour
+    maxAge: parseDurationMs(accessExpire(), 15 * 60 * 1000), // matches token TTL
     path: '/',
   });
 
@@ -54,7 +73,7 @@ const setTokenCookies = (res, accessToken, refreshToken) => {
       httpOnly: true,
       secure: isProduction,
       sameSite,
-      maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+      maxAge: parseDurationMs(refreshExpire(), 7 * 24 * 60 * 60 * 1000), // matches token TTL
       path: '/',
     });
   }
