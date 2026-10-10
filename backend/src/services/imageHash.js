@@ -116,8 +116,18 @@ const perceptualHashFromBuffer = async (imageBuffer) => {
   }
 };
 
+// A valid 64-bit pHash is 16 hex characters. sha256 fallback entries (64
+// hex chars, written when sharp is unavailable) may also live in the
+// stored flat hash lists — hamming distance over those is meaningless.
+const PHASH_HEX_LENGTH = 16;
+
 const hammingDistance = (hash1, hash2) => {
-  if (!hash1 || !hash2 || hash1.length !== hash2.length) return 64;
+  // Missing operand: maximally distant (never matches) — pinned contract.
+  if (!hash1 || !hash2) return 64;
+  // SCRUM-32: non-pHash entries (e.g. sha256 fallback slices) and any
+  // pair of differing length are excluded from hamming math. Returns
+  // null so probe sites can skip the pair instead of comparing garbage.
+  if (hash1.length !== PHASH_HEX_LENGTH || hash2.length !== PHASH_HEX_LENGTH) return null;
   let distance = 0;
   const bin1 = BigInt('0x' + hash1).toString(2).padStart(64, '0');
   const bin2 = BigInt('0x' + hash2).toString(2).padStart(64, '0');
@@ -129,6 +139,7 @@ const hammingDistance = (hash1, hash2) => {
 
 const similarity = (hash1, hash2) => {
   const distance = hammingDistance(hash1, hash2);
+  if (distance === null) return 0;
   return Math.max(0, 1 - distance / 64);
 };
 

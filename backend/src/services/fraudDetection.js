@@ -106,7 +106,8 @@ const detectRisk = async ({ product, hashes = [], aiAnalysis = {}, identitySigna
         const candidateHashes = candidate.aiAnalysis?.imageHashes || [];
         for (const candidateHash of candidateHashes) {
           const distance = hammingDistance(hash, candidateHash);
-          if (distance <= HASH_SIMILARITY_THRESHOLD) {
+          // null = non-pHash entry (e.g. sha256 fallback) — skip, never compare.
+          if (distance !== null && distance <= HASH_SIMILARITY_THRESHOLD) {
             riskScore += 35;
             const similarityPct = Math.round((1 - distance / 64) * 100);
             factors.push(

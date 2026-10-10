@@ -209,7 +209,8 @@ const uploadImages = async (req, res, next) => {
           const candidateHashes = candidate.aiAnalysis?.imageHashes || [];
           for (const candidateHash of candidateHashes) {
             const distance = hammingDistance(probe, candidateHash);
-            if (distance <= DUPLICATE_HASH_THRESHOLD) {
+            // null = non-pHash entry (e.g. sha256 fallback) — skip, never compare.
+            if (distance !== null && distance <= DUPLICATE_HASH_THRESHOLD) {
               const similarityPct = Math.round((1 - distance / 64) * 100);
               throw new AppError(
                 `Duplicate image detected (~${similarityPct}% similar to existing listing "${candidate.title}"). This image is already used in another listing.`,
@@ -909,7 +910,8 @@ const updateProduct = async (req, res, next) => {
           for (const candidate of candidates) {
             for (const candidateHash of candidate.aiAnalysis?.imageHashes || []) {
               const distance = hammingDistance(probe, candidateHash);
-              if (distance <= DUPLICATE_HASH_THRESHOLD) {
+              // null = non-pHash entry (e.g. sha256 fallback) — skip, never compare.
+              if (distance !== null && distance <= DUPLICATE_HASH_THRESHOLD) {
                 const similarityPct = Math.round((1 - distance / 64) * 100);
                 throw new AppError(
                   `Duplicate image detected (~${similarityPct}% similar to existing listing "${candidate.title}"). This image is already used in another listing.`,

@@ -8,6 +8,8 @@
  *  4. Threshold boundary: distance=4 vs distance=5
  *  5. Regression: exact-match (distance=0) still works
  *  6. Integration: detectRisk flags similar hashes in same category
+ *  7. SCRUM-32: non-pHash entries (sha256 fallback slices) are skipped,
+ *     never crash a probe, and never produce a hamming distance
  */
 
 const mongoose = require('mongoose');
@@ -69,6 +71,53 @@ describe('Duplicate Detection (Hamming distance)', () => {
     it('returns ~0.921875 for distance=5', () => {
       const sim = similarity('0000000000000000', '000000000000001f');
       expect(sim).toBeCloseTo(0.921875, 3);
+    });
+  });
+
+  // ─── 7. Non-pHash entries are excluded from hamming math (SCRUM-32) ───
+
+  describe('non-pHash entries (SCRUM-32)', () => {
+    // sha256 fallback slice: 64 hex chars, written when sharp is
+    // unavailable. Stored in the flat hash list for future exact-match
+    // use — but hamming distance over it is meaningless and must be
+    // reported as null (probe sites skip it).
+    const sha256Entry = 'a'.repeat(64);
+    const validPHash = '0000000000000000';
+
+    it('returns null for a sha256 fallback entry vs a valid pHash', () => {
+      expect(hammingDistance(validPHash, sha256Entry)).toBeNull();
+      expect(hammingDistance(sha256Entry, validPHash)).toBeNull();
+    });
+
+    it('returns null when both operands are non-pHash (same 64-char length)', () => {
+      expect(hammingDistance(sha256Entry, 'b'.repeat(64))).toBeNull();
+    });
+
+    it('similarity() treats a non-pHash pair as never similar (0.0)', () => {
+      expect(similarity(validPHash, sha256Entry)).toBe(0);
+      expect(similarity(sha256Entry, sha256Entry)).toBe(0);
+    });
+
+    it('a stored sha256 entry does not crash the duplicate probe and is skipped', () => {
+      // Simulates the probe loop in uploadImages/updateProduct/detectRisk:
+      // a candidate's imageHashes mixes pHash and sha256 fallback entries.
+      const candidateHashes = [sha256Entry, '000000000000000f', validPHash];
+      const flagged = [];
+      for (const candidateHash of candidateHashes) {
+        const distance = hammingDistance(validPHash, candidateHash);
+        if (distance !== null && distance <= 12) {
+          flagged.push(candidateHash);
+        }
+      }
+      // Only genuine pHash comparisons produced a verdict — the sha256
+      // entry was skipped without crashing (null would have matched
+      // under a bare `distance <= threshold` check).
+      expect(flagged).toEqual(['000000000000000f', '0000000000000000']);
+    });
+
+    it('still compares two valid pHashes normally', () => {
+      expect(hammingDistance(validPHash, '000000000000000f')).toBe(4);
+      expect(hammingDistance(validPHash, 'ffffffffffffffff')).toBe(64);
     });
   });
 
