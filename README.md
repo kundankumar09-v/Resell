@@ -400,15 +400,22 @@ const hammingDistance = (hash1, hash2) => {
   // count differing bits
 };
 
-// Threshold: <= 12 = duplicate (validated on real photos)
-// Observed: same-item variants -> max distance 12
-//           different products -> min distance 30 (18-point margin)
+// Threshold: <= 12 = duplicate
+// Empirical validation (scripts/validate_phash.js, 24-image corpus):
+//   0 false positives across 276 different-product pairs
+//   closest different-product pair at Hamming distance 16
+//   (4-bit margin below the threshold of 12)
+//   61/120 same-item variant pairs within the threshold
+// Verdict: threshold 12 retained — validated on a 24-image corpus,
+//   0/276 false positives across different-product pairs.
 const HASH_SIMILARITY_THRESHOLD = 12;
 ```
 
+pHash catches exact reposts and lightly-edited copies; heavily transformed variants (large crops, recompression) may exceed the gate and are covered by the CNN fingerprint layer (section 7.4).
+
 #### Mirror Hash (Anti-Evasion)
 
-A known fraud tactic is **horizontally flipping a stolen image** to evade pHash detection (the DCT hash of a flipped image differs by an observed Hamming distance of ~53). The system counters this by storing **two hashes per image**: the normal pHash and the pHash of the horizontally flipped version:
+A known fraud tactic is **horizontally flipping a stolen image** to evade pHash detection (empirically, the DCT hash of a flipped image differs by a mean Hamming distance of 27.17, with a minimum of 16 — see `scripts/phash_validation_results.md`). The mirror hash exists precisely because flipped variants can fall within or near the duplicate gate — comparing both normal and mirror hashes closes this evasion path. The system counters this by storing **two hashes per image**: the normal pHash and the pHash of the horizontally flipped version:
 
 ```js
 const mirrorPerceptualHashFromBuffer = async (imageBuffer) => {
