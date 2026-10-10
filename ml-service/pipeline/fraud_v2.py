@@ -268,6 +268,10 @@ classifier = CalibratedFraudClassifier(config.FRAUD_MODEL_PATH, config.FRAUD_CAL
 
 
 def load_thresholds() -> Dict[str, float]:
+    """Runtime thresholds: persisted PR-curve values (models_saved/
+    fraud_v2_thresholds.json, currently 0.95 flag / 0.475 review) win over
+    the config env defaults (0.60 / 0.30) when the file exists. v2 output
+    is shadow-only — the backend v1 scorer owns listing status."""
     try:
         with open(config.FRAUD_THRESHOLDS_PATH, "r") as f:
             return json.load(f)

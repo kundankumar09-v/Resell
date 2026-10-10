@@ -38,6 +38,13 @@ PRICE_MODEL_PREFIX = os.path.join(MODEL_DIR, "price_v2")
 PRICE_CONFORMAL_PATH = os.path.join(MODEL_DIR, "price_v2_conformal.json")
 
 # ── Fraud v2 ───────────────────────────────────────────────────────
+# v2 calibrated-probability thresholds (0-1 scale). NOTE: at runtime
+# models_saved/fraud_v2_thresholds.json OVERRIDES these via
+# fraud_v2.load_thresholds() when present (currently 0.95 flag / 0.475
+# review). The env defaults below are only the missing-file fallback.
+# v2 is SHADOW-only (ML_PIPELINE_V2=shadow): the Node backend v1 scorer
+# (fraudDetection.js: high >= 50 / medium >= 25 on a 0-100 additive
+# scale) remains authoritative for listing status.
 FRAUD_HIGH_THRESHOLD = _env_float("FRAUD_HIGH_THRESHOLD", 0.60)   # flag for review
 FRAUD_MEDIUM_THRESHOLD = _env_float("FRAUD_MEDIUM_THRESHOLD", 0.30)
 PHASH_EXACT_MAX_DIST = _env_int("PHASH_EXACT_MAX_DIST", 4)

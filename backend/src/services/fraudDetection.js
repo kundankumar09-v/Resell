@@ -213,6 +213,15 @@ const detectRisk = async ({ product, hashes = [], aiAnalysis = {}, identitySigna
 
   riskScore = clamp(riskScore, 0, 100);
 
+  // v1 AUTHORITATIVE risk bands (backend, 0-100 additive scale):
+  //   high   >= 50 | medium >= 25 | low < 25
+  // v2 mapping (ml-service, calibrated probability 0-1):
+  //   flag/review thresholds come from models_saved/fraud_v2_thresholds.json
+  //   (currently 0.95 flag / 0.475 review; env defaults FRAUD_HIGH_THRESHOLD
+  //   0.60 / FRAUD_MEDIUM_THRESHOLD 0.30 apply only when the file is missing).
+  // v2 runs in SHADOW mode only (ML_PIPELINE_V2=shadow: legacy served, both
+  // logged) — its output never sets listing status. The additive score and
+  // these bands remain the single source of truth.
   let riskLevel = 'low';
   if (riskScore >= 50) riskLevel = 'high';
   else if (riskScore >= 25) riskLevel = 'medium';
