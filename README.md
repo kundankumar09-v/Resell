@@ -37,6 +37,28 @@
 15. [Docker / Production Deployment](#15-docker--production-deployment)
 16. [API Reference](#16-api-reference)
 17. [Testing](#17-testing)
+18. [Screenshots](#18-screenshots)
+
+---
+
+## Demo
+
+Load realistic demo data (users, products, chat, offers, reviews, and a duplicate-image listing) into a running local MongoDB:
+
+```bash
+cd backend && npm run seed -- --force
+```
+
+`npm run seed` aborts if demo data already exists; `--force` wipes the demo-managed collections and reseeds (demo placeholder images are generated locally into `backend/public/seed-images/`, served at `/public/seed-images/`).
+
+| Email | Password | Role |
+|---|---|---|
+| admin@resell.dev | Password123! | admin |
+| priya@resell.dev | Password123! | seller |
+| arjun@resell.dev | Password123! | seller |
+| meera@resell.dev | Password123! | buyer |
+
+> Seeded data includes a duplicate-image listing to demonstrate the fraud detection pipeline.
 
 ---
 
@@ -513,21 +535,20 @@ Labels: >= 90 -> like-new | >= 75 -> good | >= 60 -> fair | else -> poor
 #### Damage Score (0 to 100, higher = more damage)
 
 ```
-Heuristic pixel signals:
-  contrast > 70 AND brightness < 130 -> +25 ("Possible surface scratches")
-  sharpness < 25                      -> +15 ("Possible wear or dull finish")
-  brightness < 80                     -> +10 ("Dark spots may indicate damage")
-
-Edge density analysis (Sobel-like gradient on 64x64 grayscale thumbnail):
+Edge density analysis only (Sobel-like gradient on 64x64 grayscale thumbnail):
   For each pixel, compute |gx| + |gy| (horizontal + vertical gradient)
   edgeRatio = pixels_with_gradient > 60 / total_pixels
 
-  edgeRatio > 0.35  -> +20 ("High edge density - possible cracks or heavy wear")
-  edgeRatio < 0.08  ->  +0 ("Smooth surface")
+  edgeRatio > 0.45  -> +55  ("Extremely high edge density - severe cracking / heavy wear")
+  edgeRatio > 0.35  -> +35  ("High edge density - possible cracks or heavy wear")
+  edgeRatio > 0.20  -> +20  ("Elevated edge density - possible surface scratches or wear")
+  edgeRatio < 0.08  ->  +0  ("Smooth surface")
 
 Final: clamped to [0, 100]
 Levels: >= 50 -> high | >= 25 -> medium | else -> low
 ```
+
+Brightness / contrast / sharpness are consumed only by the condition score — they are never double-counted as damage (the same lighting problem used to stack +50 from overlapping quality rules).
 
 These scores feed into:
 1. The **price recommendation engine** (CV score adjusts the recommended price)
@@ -963,6 +984,8 @@ REDIS_URL=redis://localhost:6379
 # ─────────────── ML Service ───────────
 # Optional in dev — falls back to heuristic analysis when unavailable
 ML_SERVICE_URL=http://localhost:8000
+# Blends local heuristic price with ML-service estimate (0-1, 0.7 = 70% ML)
+ML_BLEND_WEIGHT=0.7
 
 # ─────────────── Cloudinary ───────────
 # Required for image upload to work
@@ -993,8 +1016,9 @@ MAX_IMAGE_SIZE=5242880
 CLIP_MODEL_NAME=ViT-B-32
 CLIP_PRETRAINED=laion2b_s34b_b79k
 ML_PIPELINE_V2=0          # 0=legacy | shadow | 1=v2
-FRAUD_THRESHOLD_HIGH=70
-FRAUD_THRESHOLD_MEDIUM=30
+PHASH_DISTANCE_THRESHOLD=8  # v2 pipeline fast-path scan threshold — different domain from backend duplicate gate
+FRAUD_HIGH_THRESHOLD=0.60
+FRAUD_MEDIUM_THRESHOLD=0.30
 ```
 
 ---
@@ -1110,6 +1134,11 @@ curl http://localhost:8000/health
 | `resell-worker-price` | ./backend | — | — | Price analysis worker |
 
 The ML service requires **2 GB RAM** in production (needed for CLIP ViT-B/32 model weights loaded into memory). Workers are configured with `restart: unless-stopped` for reliability.
+
+### Deployment
+
+- Live demo: **[PENDING — add URL]**
+- Deployed demo runs with heuristic-only analysis; the full ML stack runs locally via docker compose.
 
 ---
 
@@ -1268,6 +1297,23 @@ npm run test:watch
 Test files are located in `backend/src/__tests__/`.
 
 > The backend automatically skips `dotenv` loading and env validation when `NODE_ENV=test`, allowing tests to inject their own environment variables without conflicting with a `.env` file.
+
+---
+
+## 18. Screenshots
+
+Screenshot captures are pending — placeholders below show where each embed will go (files live in `docs/screenshots/`):
+
+| Screenshot | Location |
+|---|---|
+| Home / feed | ![Home](docs/screenshots/01-home.png) |
+| Search results | ![Search](docs/screenshots/02-search.png) |
+| Product detail | ![Product detail](docs/screenshots/03-product-detail.png) |
+| Seller profile & trust score | ![Seller profile](docs/screenshots/04-seller-profile.png) |
+| Chat | ![Chat](docs/screenshots/05-chat.png) |
+| Offers | ![Offers](docs/screenshots/06-offers.png) |
+| Listing creation | ![Create listing](docs/screenshots/07-create-listing.png) |
+| Admin dashboard | ![Admin](docs/screenshots/08-admin.png) |
 
 ---
 
