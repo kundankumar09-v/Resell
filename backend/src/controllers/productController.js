@@ -1,4 +1,5 @@
 const Product = require('../models/Product');
+const ImageUploadRecord = require('../models/ImageUploadRecord');
 const Category = require('../models/Category');
 const User = require('../models/User');
 const ProductIdentity = require('../models/ProductIdentity');
@@ -288,6 +289,37 @@ const uploadImages = async (req, res, next) => {
     const predictedCategory = results[0]?.analysis?.predictedCategory || 'Other';
     const classificationConfidence = results[0]?.analysis?.classificationConfidence || 0;
 
+    // SCRUM-31: persist the computed hashes server-side, keyed by
+    // (user, publicId). createProduct reads them back instead of trusting
+    // the client's echo of this response, so a crafted API call cannot
+    // omit or fabricate hashes. Best-effort: a record write failure must
+    // never fail the upload itself — the client still receives the hashes
+    // and creation falls back to the echo path flagged as unverified.
+    try {
+      const ops = results
+        .filter((r) => r.publicId)
+        .map((r) => ({
+          updateOne: {
+            filter: { user: req.user._id, publicId: r.publicId },
+            update: {
+              $set: {
+                user: req.user._id,
+                publicId: r.publicId,
+                url: r.url,
+                hash: r.hash || null,
+                mirrorHash: r.mirrorHash || null,
+              },
+            },
+            upsert: true,
+          },
+        }));
+      if (ops.length > 0) {
+        await ImageUploadRecord.bulkWrite(ops, { ordered: false });
+      }
+    } catch (err) {
+      console.error('[Upload] Failed to persist image upload records:', err.message);
+    }
+
     res.json({
       success: true,
       images: results.map((r) => ({
@@ -439,6 +471,39 @@ const createProduct = async (req, res, next) => {
       );
     }
 
+    // ── Server-side hash authority (SCRUM-31) ───────────────────────────
+    // The upload-images response is echoed back by the client, so a crafted
+    // API call could omit or fabricate hash/mirrorHash and silently bypass
+    // duplicate detection and risk flagging. Hashes computed at upload time
+    // were persisted server-side keyed by (user, publicId) — they are the
+    // source of truth and client-echoed values are ignored whenever a
+    // server-side record exists. Images uploaded before this change (or
+    // whose record has expired) have no server-side hash: their echoed
+    // value is used as a legacy fallback but flagged via
+    // aiAnalysis.hashesUnverified so the fraud engine can weight it —
+    // legacy listings never hard-fail here.
+    const publicIds = images.map((img) => img?.publicId).filter(Boolean);
+    const uploadRecords = publicIds.length
+      ? await ImageUploadRecord.find({ user: req.user._id, publicId: { $in: publicIds } })
+          .select('publicId hash mirrorHash')
+          .lean()
+      : [];
+    const recordByPublicId = new Map(uploadRecords.map((r) => [r.publicId, r]));
+
+    let hashesUnverified = false;
+    const resolvedImages = images.map((img) => {
+      const record = img?.publicId ? recordByPublicId.get(img.publicId) : null;
+      if (record && record.hash) {
+        return {
+          ...img,
+          hash: record.hash,
+          mirrorHash: record.mirrorHash || null,
+        };
+      }
+      if (img?.hash || img?.mirrorHash) hashesUnverified = true;
+      return img;
+    });
+
     // NOTE: creation deliberately does NOT hard-block duplicate hashes. The
     // hard 409 gate lives at upload-images (where the raw image bytes are
     // verified server-side). At creation, duplicate hashes flow through the
@@ -520,10 +585,11 @@ const createProduct = async (req, res, next) => {
       yearsUsed: yearsUsed || 0,
       specifications: specifications || [],
       location: location || {},
-      images: images.map((img, idx) => ({
+      images: resolvedImages.map((img, idx) => ({
         url: img.url,
         publicId: img.publicId,
         isPrimary: idx === 0,
+        ...(img.hash ? { perceptualHash: img.hash } : {}),
       })),
       seller: req.user._id,
       ...(identityResult?.identity ? { productIdentity: identityResult.identity._id } : {}),
@@ -538,7 +604,11 @@ const createProduct = async (req, res, next) => {
         conditionScore: 0,
         damageScore: 0,
         damageDescription: '',
-        imageHashes: (images || []).flatMap((i) => [i?.hash, i?.mirrorHash]).filter(Boolean),
+        // SCRUM-31: hashes come from the server-side upload record when one
+        // exists (client echo ignored); legacy images without a server-side
+        // hash fall back to the echoed value with hashesUnverified=true.
+        imageHashes: resolvedImages.flatMap((i) => [i?.hash, i?.mirrorHash]).filter(Boolean),
+        hashesUnverified,
         priceRecommendation: {
           recommendedPrice: 0,
           minPrice: 0,
@@ -564,7 +634,7 @@ const createProduct = async (req, res, next) => {
     // Queue background job for full AI analysis
     await imageProcessingQueue.add('analyze-product', {
       productId: product._id.toString(),
-      images: images.map(img => ({
+      images: resolvedImages.map(img => ({
         url: img.url,
         publicId: img.publicId,
         hash: img.hash,

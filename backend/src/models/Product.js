@@ -148,6 +148,10 @@ const productSchema = new mongoose.Schema(
       visualAnalysisAvailable: { type: Boolean, default: false },
       damageDescription: { type: String, default: '' },
       imageHashes: [{ type: String }], // Legacy - keeping for backward compatibility
+      // SCRUM-31: true when any stored hash came from the client echo rather
+      // than a server-side upload record (legacy images) — the fraud engine
+      // can weight unverified hashes accordingly.
+      hashesUnverified: { type: Boolean, default: false },
       duplicateMatch: {
         productId: { type: mongoose.Schema.Types.ObjectId, ref: 'Product', default: null },
         similarity: { type: Number, default: 0 },
