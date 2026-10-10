@@ -160,28 +160,26 @@ const detectDamage = async (imageBuffer) => {
     };
   }
 
-  // Heuristic damage score:
-  // - High contrast regions with low brightness may indicate scratches
-  // - Very low sharpness may indicate dents/cracks
-  // - Low brightness may indicate worn-out surface
+  // Heuristic damage score — EDGE DENSITY ONLY.
+  //
+  // The image-quality stats (brightness / contrast / sharpness) measure
+  // the PHOTO, not the product. They are already consumed by
+  // assessCondition(); previously they were ALSO counted here, so the
+  // same lighting problem (high contrast + dark + derived-low sharpness)
+  // could add up to +50 for a perfectly undamaged item, while the
+  // documented "high" damage band (>= 50) was only reachable by stacking
+  // those overlapping quality rules. Real damage indicators (cracks,
+  // deep scratches, heavy wear) introduce many thin high-gradient lines,
+  // so edge density is the damage signal:
+  //   edgeRatio > 0.45 -> +55  severe cracking / heavy wear  (level: high)
+  //   edgeRatio > 0.35 -> +35  possible cracks / heavy wear
+  //   edgeRatio > 0.20 -> +20  possible surface scratches / wear
+  //   edgeRatio < 0.08 -> smooth surface (no penalty)
+  // Max reachable score = 55, so level 'high' (>= 50) is achievable with
+  // genuine heavy-wear evidence and nothing else can push it there.
 
   let damageScore = 0;
   const factors = [];
-
-  if (quality.contrast > 70 && quality.brightness < 130) {
-    damageScore += 25;
-    factors.push('Possible surface scratches detected');
-  }
-
-  if (quality.sharpness < 25) {
-    damageScore += 15;
-    factors.push('Possible wear or dull finish');
-  }
-
-  if (quality.brightness < 80) {
-    damageScore += 10;
-    factors.push('Dark spots or shadows may indicate damage');
-  }
 
   // Edge density heuristic via difference calculation
   if (sharp) {
@@ -201,9 +199,15 @@ const detectDamage = async (imageBuffer) => {
         }
       }
       const edgeRatio = edges / (62 * 62);
-      if (edgeRatio > 0.35) {
-        damageScore += 20;
+      if (edgeRatio > 0.45) {
+        damageScore += 55;
+        factors.push('Extremely high edge density — severe cracking or heavy wear likely');
+      } else if (edgeRatio > 0.35) {
+        damageScore += 35;
         factors.push('High edge density — possible cracks or heavy wear');
+      } else if (edgeRatio > 0.20) {
+        damageScore += 20;
+        factors.push('Elevated edge density — possible surface scratches or wear');
       } else if (edgeRatio < 0.08) {
         factors.push('Smooth surface');
       }

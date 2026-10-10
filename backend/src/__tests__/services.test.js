@@ -240,6 +240,56 @@ describe('Service Unit Tests', () => {
     });
   });
 
+  describe('computerVision.detectDamage', () => {
+    const sharpLib = require('sharp');
+
+    const rawJpeg = (raw, width, height) =>
+      sharpLib(raw, { raw: { width, height, channels: 3 } }).jpeg({ quality: 100 }).toBuffer();
+
+    const patternJpeg = (size, fn) => {
+      const raw = Buffer.alloc(size * size * 3);
+      for (let y = 0; y < size; y++) {
+        for (let x = 0; x < size; x++) {
+          const v = fn(x, y);
+          const i = (y * size + x) * 3;
+          raw[i] = raw[i + 1] = raw[i + 2] = v;
+        }
+      }
+      return rawJpeg(raw, size, size);
+    };
+
+    it('returns no-evidence (null score) when the buffer cannot be decoded', async () => {
+      const result = await detectDamage(Buffer.alloc(100, 0x80));
+      expect(result.available).toBe(false);
+      expect(result.score).toBeNull();
+      expect(result.level).toBeNull();
+    });
+
+    it('scores a smooth uniform surface as low damage', async () => {
+      const buf = await sharpLib({
+        create: { width: 128, height: 128, channels: 3, background: { r: 128, g: 128, b: 128 } },
+      }).jpeg().toBuffer();
+      const result = await detectDamage(buf);
+      expect(result.level).toBe('low');
+      expect(result.score).toBe(0);
+      expect(result.factors).toContain('Smooth surface');
+    });
+
+    it('reaches the high band (>= 50) on a dense high-edge surface', async () => {
+      const buf = await patternJpeg(64, (x, y) => ((x + y) % 2 === 0 ? 0 : 255));
+      const result = await detectDamage(buf);
+      expect(result.score).toBeGreaterThanOrEqual(50);
+      expect(result.level).toBe('high');
+    });
+
+    it('does not count high contrast / low brightness as damage on a smooth surface', async () => {
+      const buf = await patternJpeg(64, (x) => (x < 32 ? 0 : 255));
+      const result = await detectDamage(buf);
+      expect(result.score).toBe(0);
+      expect(result.factors).not.toContain('Possible surface scratches detected');
+    });
+  });
+
   describe('computerVision.classifyProduct', () => {
     it('classifies electronics from title keywords', async () => {
       const buf = Buffer.alloc(100, 0x80);

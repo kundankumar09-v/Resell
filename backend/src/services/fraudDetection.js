@@ -180,7 +180,10 @@ const detectRisk = async ({ product, hashes = [], aiAnalysis = {}, identitySigna
   }
 
   // 5. Risk from AI analysis
-  if (aiAnalysis.damageScore >= 60) {
+  // Aligned with computerVision.detectDamage's 'high' band (>= 50). Previously
+  // 60, which the heuristic could never reach (max was 50 from overlapping
+  // quality rules), so this supporting signal was dead code.
+  if (aiAnalysis.damageScore >= 50) {
     riskScore += 5;
     factors.push('High damage score detected by AI');
   }
