@@ -7,5 +7,4 @@ coverage
 vite.config.js.timestamp-*
 
 __pycache__/
-ml-service/eval/data/images/
-ml-service/eval/data/tmp/
+ml-service/eval/data/
