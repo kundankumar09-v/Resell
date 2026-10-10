@@ -5,7 +5,20 @@ const isTest = process.env.NODE_ENV === 'test';
 
 // No-op stubs used when Redis is unavailable or in test mode.
 const noop = async () => {};
-const noopQueue = { add: noop, on: noop };
+const noopQueue = {
+  add: (name) => {
+    // Redis offline (or test mode): enqueue calls are no-ops. In non-test
+    // mode log the dropped job so background work is never lost SILENTLY —
+    // the caller still gets a resolved promise, matching degrade-gracefully.
+    if (!isTest) {
+      console.warn(
+        `[Queue] Redis unavailable — dropping '${name}' job (queues disabled, background processing will not run).`
+      );
+    }
+    return Promise.resolve();
+  },
+  on: noop,
+};
 
 /**
  * Checks if a TCP port is accepting connections without creating any
