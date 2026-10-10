@@ -182,7 +182,7 @@ Resell/
 |       +-- config/            # DB connection, env validation
 |       +-- controllers/       # Route handlers (13 controllers)
 |       +-- middleware/        # Auth, upload, error middleware
-|       +-- models/            # 14 Mongoose schemas
+|       +-- models/            # 15 Mongoose schemas
 |       +-- queues/            # BullMQ queue definitions
 |       +-- routes/            # Express routers
 |       +-- services/          # Business logic & ML integrations
@@ -190,11 +190,13 @@ Resell/
 |       |   +-- imageHash.js            # DCT pHash implementation
 |       |   +-- imageClassifier.js      # MobileNet via TF.js
 |       |   +-- computerVision.js       # Condition / damage scoring
+|       |   +-- cvAdapter.js            # CV provider (local heuristics / remote ML)
 |       |   +-- productFingerprint.js   # CNN cosine similarity
 |       |   +-- identityVerification.js # Serial/IMEI/VIN registry
 |       |   +-- provenance.js           # Ownership chain
 |       |   +-- trustScore.js           # Seller trust score
 |       |   +-- priceRecommendation.js  # AI price engine
+|       |   +-- priceSweep.js           # Stale price re-analysis sweep
 |       |   +-- mlClient.js             # HTTP client -> ML service
 |       |   +-- vectorSearch.js         # CLIP vector queries
 |       |   +-- exchangeRates.js        # Live FX rates
@@ -220,7 +222,7 @@ Resell/
 |   +-- requirements.txt
 |   +-- Dockerfile
 |
-+-- docker-compose.yml         # Full stack orchestration
++-- docker-compose.yml         # Backend stack orchestration (API, workers, ML service, DB, Redis)
 +-- .env.example               # Environment variable template
 ```
 
@@ -233,24 +235,30 @@ Resell/
 | Page | Path | Description |
 |---|---|---|
 | `Home` | `/` | Hero, featured listings, categories |
+| `Login` | `/login` | Sign in |
+| `Register` | `/register` | Create an account |
 | `Marketplace` | `/marketplace` | Browse, filter, search all listings |
-| `ProductDetail` | `/products/:id` | Full listing + fraud indicators + reviews |
+| `ProductDetail` | `/product/:id` | Full listing + fraud indicators + reviews |
+| `SellerProfile` | `/seller/:id` | Public seller page + trust score |
 | `SellProduct` | `/sell` | Multi-step listing creation with AI assist |
-| `EditProduct` | `/products/:id/edit` | Edit existing listing |
-| `MyProducts` | `/my-products` | Seller's own listings |
-| `Chat` | `/chat` | Real-time messaging with socket presence |
+| `EditProduct` | `/edit/:id` | Edit existing listing |
+| `Favorites` | `/favorites` | Saved listings |
 | `Offers` | `/offers` | Offer management (make / counter / accept) |
 | `Checkout` | `/checkout/:id` | Stripe payment flow |
+| `OrderSuccess` | `/order-success` | Post-payment confirmation |
+| `OrderCancelled` | `/order-cancelled` | Cancelled payment landing |
 | `Orders` | `/orders` | Order history |
 | `OrderDetail` | `/orders/:id` | Order tracking & management |
-| `Favorites` | `/favorites` | Saved listings |
+| `MyProducts` | `/my-products` | Seller's own listings |
 | `Profile` | `/profile` | User settings |
-| `SellerProfile` | `/sellers/:id` | Public seller page + trust score |
-| `AdminDashboard` | `/admin` | Platform analytics & moderation |
-| `AdminProducts` | `/admin/products` | Listing management |
+| `Chat` | `/chat` | Real-time messaging with socket presence |
+| `AdminDashboard` | `/admin/dashboard` | Platform overview & moderation |
 | `AdminUsers` | `/admin/users` | User management |
+| `AdminProducts` | `/admin/products` | Listing management |
 | `AdminReports` | `/admin/reports` | Report queue |
+| `AdminAnalytics` | `/admin/analytics` | Platform analytics |
 | `AdminCategories` | `/admin/categories` | Category management |
+| `NotFound` | `*` | 404 fallback |
 
 ### Context Providers
 
@@ -269,19 +277,19 @@ The backend is a monolithic Express application running on **port 5000**.
 
 | Prefix | Controller | Key Endpoints |
 |---|---|---|
-| `/api/auth` | authController | POST /register, POST /login, POST /logout, POST /refresh |
-| `/api/products` | productController | GET /, POST /, GET /:id, PUT /:id, DELETE /:id, GET /:id/similar, GET /:id/identity |
-| `/api/categories` | categoryController | GET /, POST /, PUT /:id, DELETE /:id |
-| `/api/sellers` | sellerController | GET /:id, GET /:id/trust |
-| `/api/offers` | offerController | POST /, GET /, PUT /:id/accept, PUT /:id/counter, PUT /:id/reject |
-| `/api/chat` | chatController | POST /conversations, GET /conversations, POST /:id/messages |
-| `/api/orders` | orderController | GET /, GET /:id, PUT /:id/cancel, PUT /:id/ship |
-| `/api/checkout` | checkoutController | POST /create-session, POST /webhook |
-| `/api/favorites` | favoriteController | POST /:productId, DELETE /:productId, GET / |
-| `/api/reports` | reportController | POST /, GET / |
-| `/api/notifications` | notificationController | GET /, PUT /:id/read |
-| `/api/exchange-rates` | exchangeController | GET / |
-| `/api/admin` | adminController | Users, products, reports management |
+| `/api/auth` | authController | POST /register, POST /login, POST /logout, POST /refresh, GET /me, PUT /profile, PUT /password |
+| `/api/products` | productController | GET /, POST /, GET /:id, PUT /:id, DELETE /:id, GET /suggest-price, GET /brands, GET /mine, GET /:id/similar, GET /:id/reviews, GET /:id/identity, POST /:id/identity/possession-challenge, PATCH /:id/sold |
+| `/api/categories` | categoryController | GET /, GET /stats, GET /:slug, POST /, PUT /:id, DELETE /:id |
+| `/api/sellers` | sellerController | GET /:id, GET /:id/trust, POST /:id/reviews, GET /:id/similar |
+| `/api/offers` | offerController | POST /, GET /mine, GET /received, GET /:id, PUT /:id, POST /:id/accept, POST /:id/reject, POST /:id/counter |
+| `/api/chat` | chatController | GET /unread-count, POST /conversations, GET /conversations, GET /conversations/:id/messages, POST /messages, POST /conversations/:id/read |
+| `/api/orders` | orderController | GET /mine, GET /selling, GET /:id, PATCH /:id/ship, PATCH /:id/deliver, POST /:id/cancel |
+| `/api/checkout` | checkoutController | POST /session, POST /webhook |
+| `/api/favorites` | favoriteController | GET /, GET /:productId/check, POST /:productId, DELETE /:productId |
+| `/api/reports` | reportController | POST /, GET /, PUT /:id |
+| `/api/notifications` | notificationController | GET /, GET /unread, PATCH /:id/read, PATCH /read-all |
+| `/api/exchange-rates` | exchangeController | GET /rates, POST /convert |
+| `/api/admin` | adminController | GET /stats, GET /analytics, Users / products / reports / identity management |
 
 ### Rate Limits
 
@@ -402,14 +410,14 @@ imageBuffer (raw bytes from Cloudinary upload)
     |
     v Sharp: resize to 224x224, removeAlpha(), raw RGB pixels
     |
-    v Float32Array: pixel[i] / 255.0 (normalize 0 to 1)
-    |
-    v tf.tensor4d([1, 224, 224, 3])
+    v tf.tensor3d([224, 224, 3], float32) of raw 0-255 pixels
+      (@tensorflow-models/mobilenet normalizes internally — pre-dividing
+      by 255 collapses the effective input to near-black)
     |
     v mobilenet.classify(tensor, topK=10) -> [{className, probability}]
     |
     v Map ImageNet labels -> ReSell categories
-      (150+ label-to-category mappings defined)
+      (130+ label-to-category mappings defined)
     |
     v Aggregate probabilities per category -> pick winner
     |
@@ -427,7 +435,7 @@ const IMAGENET_TO_CATEGORY = {
   'sofa': 'Home & Garden',
   'barbell': 'Sports & Outdoors',
   'book': 'Books & Media',
-  // ... 150+ mappings covering all categories
+  // ... 130+ mappings covering all categories
 };
 ```
 
@@ -523,7 +531,9 @@ Levels: >= 50 -> high | >= 25 -> medium | else -> low
 
 These scores feed into:
 1. The **price recommendation engine** (CV score adjusts the recommended price)
-2. The **fraud risk engine** (damage score >= 60 adds +5 risk points)
+2. The **fraud risk engine** (damage score >= 50 adds +5 risk points)
+
+> **Availability semantics:** When Sharp is unavailable or the image cannot be decoded, both `assessCondition()` and `detectDamage()` return `score: null` with `available: false`. A missing visual estimate is **never fabricated** as a 0 — the UI is expected to show "insufficient evidence" instead of a misleading score.
 
 ### 7.6 Identity Verification & Provenance
 
@@ -661,7 +671,7 @@ All signals are aggregated into a single score by the `detectRisk()` function:
 | High-value listing (>5000) from account < 30 days old | +15 |
 | Same description in >= 2 other active listings | +20 |
 | Seller has > 3 reports against them | +15 |
-| AI damage score >= 60 | +5 |
+| AI damage score >= 50 | +5 |
 | Identity signals (OWNERSHIP_MISMATCH, etc.) | +10 to +100 |
 | Visual CNN fingerprint similarity | +10 to +20 |
 
@@ -937,7 +947,9 @@ MONGODB_URI=mongodb://localhost:27017/resell
 
 # ─────────────── Auth ─────────────────
 JWT_SECRET=your_jwt_secret_here_minimum_32_characters
-JWT_EXPIRE=7d
+# Access token is short-lived; refresh token is long-lived and used only by /api/auth/refresh
+JWT_ACCESS_EXPIRE=15m
+JWT_REFRESH_EXPIRE=7d
 
 # ─────────────── Redis ────────────────
 # Optional in dev — queues are disabled gracefully when Redis is unavailable
@@ -960,12 +972,14 @@ STRIPE_WEBHOOK_SECRET=whsec_...
 STRIPE_PUBLISHABLE_KEY=pk_test_...
 
 # ─────────────── ML Thresholds ────────
-HASH_THRESHOLD=8
-CNN_SIMILARITY_THRESHOLD=0.75
-DUPLICATE_CHECK_TIMEOUT=10000
-MAX_IMAGE_SIZE=5242880
+# pHash Hamming-distance duplicate threshold — single source of truth, read by
+# fraudDetection.js AND the upload/edit duplicate gate (constants.js)
+HASH_SIMILARITY_THRESHOLD=12
+# Visual (CNN fingerprint) similarity tiers — medium = supporting signal,
+# strong = very strong similarity (still supporting-only in the fraud engine)
 VISUAL_SIMILARITY_MEDIUM_THRESHOLD=0.90
 VISUAL_SIMILARITY_STRONG_THRESHOLD=0.97
+MAX_IMAGE_SIZE=5242880
 ```
 
 ### ML Service (`ml-service/.env`)
