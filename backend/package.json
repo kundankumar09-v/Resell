@@ -7,7 +7,7 @@
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
     "dev:restart": "nodemon src/server.js",
-    "seed": "node src/utils/seed.js",
+    "seed": "node scripts/seed.js",
     "test": "jest --runInBand --detectOpenHandles --forceExit",
     "test:watch": "jest --watch",
     "worker": "node src/workers/imageProcessor.js",

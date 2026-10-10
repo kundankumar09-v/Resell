@@ -8,3 +8,6 @@ vite.config.js.timestamp-*
 
 __pycache__/
 ml-service/eval/data/
+
+# Generated demo placeholder images (created by backend/scripts/seed.js)
+backend/public/seed-images/

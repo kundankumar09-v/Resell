@@ -83,6 +83,8 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(cookieParser());
 app.use(mongoSanitize());
 
+app.use('/public', express.static(path.join(__dirname, '..', 'public')));
+
 if (process.env.NODE_ENV === 'development') {
   app.use(morgan('dev'));
 }
