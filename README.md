@@ -958,7 +958,7 @@ aiAnalysis: {
 | **Rate Limiting** | Per-endpoint limits via express-rate-limit |
 | **CORS** | Explicit allowlist via `CLIENT_URL` env var only |
 | **Stripe Security** | Webhook signature verification via `STRIPE_WEBHOOK_SECRET` |
-| **Identifier Privacy** | Raw serial numbers / IMEI hashed with SHA-256, never stored or returned |
+| **Identifier Privacy** | Raw serial numbers / IMEI hashed with HMAC-SHA256 keyed by `IDENTIFIER_HASH_SALT` (added to defeat rainbow-table attacks on the small, structured identifier space), never stored or returned. Pre-salt SHA-256 records are migrated lazily — the legacy hash is still accepted on lookup and upgraded in place. Changing the salt invalidates existing salted records. |
 | **Image Validation** | Sharp validates image buffers before any ML processing |
 | **Input Validation** | Mongoose schema-level constraints + controller-level checks |
 | **Compression** | Response compression enabled (compression middleware) |
@@ -1015,6 +1015,11 @@ HASH_SIMILARITY_THRESHOLD=12
 VISUAL_SIMILARITY_MEDIUM_THRESHOLD=0.90
 VISUAL_SIMILARITY_STRONG_THRESHOLD=0.97
 MAX_IMAGE_SIZE=5242880
+
+# ─────────────── Identifier Hashing ────────────
+# HMAC key for physical-product identifier hashes (serial/IMEI/VIN). Min 32
+# chars; changing it invalidates existing salted identity records.
+IDENTIFIER_HASH_SALT=change-me-to-a-long-random-string-min-32-chars
 ```
 
 ### ML Service (`ml-service/.env`)

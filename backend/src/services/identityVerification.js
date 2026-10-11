@@ -22,7 +22,7 @@ const ProductIdentity = require('../models/ProductIdentity');
 const Product = require('../models/Product');
 const Sale = require('../models/Sale');
 const AppError = require('../utils/AppError');
-const { hashIdentifier, issueVerificationCode, safeCodeEqual, createProvenanceEvent } = require('./provenance');
+const { hashIdentifier, legacyHashIdentifier, issueVerificationCode, safeCodeEqual, createProvenanceEvent } = require('./provenance');
 
 // Signals understood by the fraud engine (fraudDetection.js)
 const SIGNALS = {
@@ -132,6 +132,27 @@ const verifyOwnershipForListing = async ({
   const warnings = [];
 
   let identity = await ProductIdentity.findOne({ identifierType, identifierHash });
+
+  // Salt migration (SCRUM-3x): records written before identifier hashing was
+  // keyed by IDENTIFIER_HASH_SALT used a bare SHA-256. A salted-lookup miss
+  // falls back to the legacy hash so pre-salt identities keep resolving; any
+  // legacy record found is upgraded in place to the salted hash (idempotent —
+  // once upgraded, the salted lookup hits directly and this branch is never
+  // reached for that identifier again).
+  if (!identity) {
+    const legacyHash = legacyHashIdentifier(rawIdentifier, identifierType);
+    if (legacyHash !== identifierHash) {
+      const legacy = await ProductIdentity.findOne({ identifierType, identifierHash: legacyHash });
+      if (legacy) {
+        await ProductIdentity.updateOne(
+          { _id: legacy._id },
+          { $set: { identifierHash } }
+        );
+        identity = legacy;
+        identity.identifierHash = identifierHash;
+      }
+    }
+  }
 
   // A. New identifier -> register + REGISTERED event
   // (productId may be null when verification runs before the listing is

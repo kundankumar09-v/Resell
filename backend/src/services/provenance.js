@@ -4,8 +4,13 @@
  * Physical-product identity hashing, hash-chained provenance events,
  * and chain verification. Generates events server-side only.
  *
- * Raw identifiers are normalized, hashed with SHA-256, and never
- * stored, logged, or exposed.
+ * Raw identifiers are normalized, hashed with HMAC-SHA256 keyed by
+ * IDENTIFIER_HASH_SALT, and never stored, logged, or exposed. The salt
+ * (SCRUM-3x) defeats rainbow-table / offline dictionary attacks against
+ * identifier hashes — a bare SHA-256 of a known IMEI/serial is trivially
+ * reversible. Records written before salting are migrated lazily: their
+ * plain SHA-256 hash is still accepted on lookup (legacyHashIdentifier)
+ * and upgraded in place to the salted form.
  */
 
 const crypto = require('crypto');
@@ -16,6 +21,29 @@ const GENESIS_HASH = 'GENESIS';
 
 // Proof-of-possession verification codes are short-lived (24 hours)
 const VERIFICATION_CODE_TTL_MS = 24 * 60 * 60 * 1000;
+
+// Salt used to key identifier hashes. Read from IDENTIFIER_HASH_SALT;
+// when the env var is absent a constant fallback keeps the service
+// functional locally (developers running without a backend/.env still get
+// salted, non-rainbowable hashes). The fallback is NOT a per-deployment
+// secret — production must set IDENTIFIER_HASH_SALT explicitly. Changing
+// the salt invalidates existing salted records (their hashes no longer
+// resolve); the lazy legacy upgrade only covers pre-salt records.
+const FALLBACK_IDENTIFIER_HASH_SALT =
+  'resell-fallback-identifier-salt-change-me-in-production';
+let warnedSaltFallback = false;
+const getIdentifierHashSalt = () => {
+  const salt = process.env.IDENTIFIER_HASH_SALT;
+  if (!salt && !warnedSaltFallback) {
+    warnedSaltFallback = true;
+    if (process.env.NODE_ENV !== 'test') {
+      console.warn(
+        '[provenance] IDENTIFIER_HASH_SALT not set — using the constant fallback salt. Set it in production.'
+      );
+    }
+  }
+  return salt || FALLBACK_IDENTIFIER_HASH_SALT;
+};
 
 // Category slug/name keywords eligible for identifier collection
 const IDENTIFIER_CATEGORY_KEYWORDS = [
@@ -72,9 +100,25 @@ const normalizeIdentifier = (raw, identifierType) => {
 };
 
 /**
- * SHA-256 of the normalized identifier. Raw value is never persisted.
+ * HMAC-SHA256 of the normalized identifier keyed by IDENTIFIER_HASH_SALT.
+ * Raw value is never persisted. The salt makes identifier hashes immune to
+ * precomputed rainbow tables for the (small, structured) IMEI/VIN/serial
+ * space.
  */
 const hashIdentifier = (raw, identifierType) => {
+  const normalized = normalizeIdentifier(raw, identifierType);
+  return crypto
+    .createHmac('sha256', getIdentifierHashSalt())
+    .update(normalized)
+    .digest('hex');
+};
+
+/**
+ * Legacy pre-salt SHA-256 identifier hash. Used only for lazy migration:
+ * identityVerification falls back to this lookup for records created before
+ * hashing was salted and upgrades them to the salted hash in place.
+ */
+const legacyHashIdentifier = (raw, identifierType) => {
   const normalized = normalizeIdentifier(raw, identifierType);
   return crypto.createHash('sha256').update(normalized).digest('hex');
 };
@@ -213,6 +257,7 @@ module.exports = {
   IDENTIFIER_CATEGORY_KEYWORDS,
   normalizeIdentifier,
   hashIdentifier,
+  legacyHashIdentifier,
   issueVerificationCode,
   safeCodeEqual,
   generateVerificationCode: () => issueVerificationCode().code,
