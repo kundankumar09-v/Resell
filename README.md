@@ -37,7 +37,8 @@
 15. [Docker / Production Deployment](#15-docker--production-deployment)
 16. [API Reference](#16-api-reference)
 17. [Testing](#17-testing)
-18. [Screenshots](#18-screenshots)
+18. [Theoretical Limitations & Mitigations](#18-theoretical-limitations--mitigations)
+19. [Screenshots](#19-screenshots)
 
 ---
 
@@ -1318,7 +1319,31 @@ Test files are located in `backend/src/__tests__/`.
 
 ---
 
-## 18. Screenshots
+## 18. Theoretical Limitations & Mitigations
+
+This section is an honest inventory of the theoretical bounds the fraud/identity/trust stack operates within, alongside the mitigations already in the codebase. Perceptual hashing, CNN fingerprints, statistical pricing, and trust heuristics are probabilistic tools: they reduce abuse but are not proofs. Every row below names a concrete limitation and the specific mitigation that bounds its blast radius.
+
+| # | Theoretical Limitation | Practical Impact | Mitigation in Codebase |
+|---|---|---|---|
+| 1 | pHash is not a perceptual proof; re-encoded or photographed copies diverge from a stored hash | Real-world duplicates can score below the similarity threshold | 6-hash set probing (plain/mirror/r90/r180/r270/vflip) covers exact-same-pipeline transforms 96/96 in validation; multi-signal fusion (pHash + CNN + price) so a missed duplicate still needs other signals to pass |
+| 2 | Candidate scans are deliberately bounded (500 duplicates / 200 visual) | Coverage loss on large catalogs; the earliest 200-500 listings monopolize the window | `DUPLICATE_SCAN_CAP` / `VISUAL_SCAN_CAP` env caps + `countDocuments` truncation warning so silent under-scanning becomes visible; HNSW ANN index covers the unbounded case |
+| 3 | Non-perceptual `sha256`-slice fallback hashes (sharp unavailable) are invisible to pHash similarity | A few images never participate in duplicate checks | Fallback entries are typed null-distance and skipped, never false-match; pHash remains the primary path and logs when sharp is missing |
+| 4 | Rule-based signals must not reveal their own thresholds | Sellers can reverse-engineer exactly what triggers a flag and game it | Factors are generalized into coarse `riskFactorCategories` for buyers/sellers; the precise factor strings (with thresholds) are admin-only |
+| 5 | Statistical price scoring has no ground truth about "fair" market value | Low/above-original price heuristics are approximations | Continuous graduated penalties (ceil-stepped, no cliff), ML kNN `price-estimate` blended via `ML_BLEND_WEIGHT`, and feedback on human decisions |
+| 6 | Trust metrics can be gamed by a seller listing to accomplices | Concentrated buyer bases inflate sales volume | Sales-concentration ratio caps the sales sub-score when >60% of recent buyers are repeats; only verified-purchase reviews count |
+| 7 | Identifier hashing is hashing, not encryption; known identifiers are still enumerable | A determined adversary could infer that a raw serial is listed | HMAC-SHA256 keyed by a per-deployment `IDENTIFIER_HASH_SALT` (min 32 chars), lazy migration of legacy bare-hash records; verification requires actual device possession |
+| 8 | ML v2 only serves in production-shadow mode until enabled; retraining depends on feedback volume | v2 improvements sit unused unless explicitly flipped | `ML_PIPELINE_V2` / `ML_PIPELINE_SHADOW` flags, drift report at `/pipeline-stats`, and `training/retrain.py` consuming appeal/report outcome feedback |
+| 9 | First backend boot fetches MobileNet weights over the network | Slow (~35s) cold start; offline boot fails warm-up | Failures degrade to local heuristics; neither fraud gating nor listing creation is blocked on the model actually having loaded |
+| 10 | `RemoteMLProvider` (`cvAdapter.js`) is a stub; remote CV inference is deferred | Some CV signals fall back to local heuristics | Explicit stub warning + documented fallback path; local CNN fingerprinting remains the committed visual signal |
+| 11 | HNSW ANN nearest-neighbor lookups are approximate | k-NN results can omit true nearest neighbors | ANN used only for fast embedding retrieval; decision-critical comparisons still run the exact code path |
+| 12 | Duplicate/image scans are category-scoped | Cross-category duplicates fall outside the candidate window | Deliberate trade-off for bounded latency; the bounded-scan truncation warning surfaces when the pool is exhausted rather than silently passing |
+| 13 | Automated flagging can false-positive legitimate listings | Seller friction from a wrong flag | Self-serve appeal flow (owner-only, one pending per product) that clears the flag on approval; approval also records `disputedFactors` so the ML side learns |
+| 14 | Model feedback is driven by human decisions, which are themselves noisy and low-volume | Risk of over-fitting to a tiny, biased feedback set | Only unambiguous decisions are fed back (appeal approved = false positive; resolved product report = confirmed fraud); ml-service attaches an outcome only to an unlabelled `outcome:null` record |
+| 15 | Hash state is duplicated across storage schemas (Product vs ImageUploadRecord) | Schema drift could make mirror-hash gates and probe sets disagree | Upload-time mirror-hash duplicate gate + worker merge-preserve semantics keep the two stores consistent by construction |
+
+---
+
+## 19. Screenshots
 
 Screenshot captures are pending — placeholders below show where each embed will go (files live in `docs/screenshots/`):
 
