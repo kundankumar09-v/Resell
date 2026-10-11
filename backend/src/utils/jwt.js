@@ -2,6 +2,8 @@ const jwt = require('jsonwebtoken');
 
 const crypto = require('crypto');
 
+const { FIRST_CLIENT_ORIGIN } = require('../config/corsOrigins');
+
 // Access and refresh tokens have separate lifetimes:
 //   - access:  short (default 15m) — reduces the blast radius of a leaked token
 //   - refresh: long  (default 7d)  — used only by /api/auth/refresh
@@ -44,7 +46,10 @@ const verifyToken = (token) => {
  */
 const setTokenCookies = (res, accessToken, refreshToken) => {
   const isProduction = process.env.NODE_ENV === 'production';
-  const clientUrl = process.env.CLIENT_URL || 'http://localhost:5173';
+  // First entry of the CORS allowlist — the single concrete origin used for
+  // the sameSite hostname comparison. All listed origins share the same
+  // deployment host by construction, so comparing ports is irrelevant.
+  const clientUrl = FIRST_CLIENT_ORIGIN;
   // Determine sameSite based on whether CLIENT_URL is on a different *domain*.
   // Comparing full origins (including port) is wrong — localhost:3000 and
   // localhost:5000 are same-site.  Only different hostnames (e.g. example.com

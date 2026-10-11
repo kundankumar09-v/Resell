@@ -2,6 +2,7 @@ const Stripe = require('stripe');
 const Sale = require('../models/Sale');
 const Product = require('../models/Product');
 const { notify } = require('../services/notificationService');
+const { FIRST_CLIENT_ORIGIN } = require('../config/corsOrigins');
 
 const PLATFORM_FEE_PERCENT = 5;
 
@@ -52,8 +53,8 @@ async function createCheckoutSession({ product, buyer, shippingAddress, offer = 
       sellerId: product.seller.toString(),
       ...(offer ? { offerId: offer._id.toString() } : {}),
     },
-    success_url: `${process.env.CLIENT_URL || 'http://localhost:3000'}/order-success?session_id={CHECKOUT_SESSION_ID}`,
-    cancel_url: `${process.env.CLIENT_URL || 'http://localhost:3000'}/checkout/${product._id}?cancelled=true`,
+    success_url: `${FIRST_CLIENT_ORIGIN}/order-success?session_id={CHECKOUT_SESSION_ID}`,
+    cancel_url: `${FIRST_CLIENT_ORIGIN}/checkout/${product._id}?cancelled=true`,
   });
 
   const sale = await Sale.create({

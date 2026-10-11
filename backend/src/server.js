@@ -25,14 +25,28 @@ const connectDB = require('./config/db');
 const setupSocket = require('./sockets');
 const { errorHandler, notFound } = require('./utils/errorHandler');
 const { setIo } = require('./services/notificationService');
+const { CLIENT_ORIGINS, isOriginAllowed } = require('./config/corsOrigins');
 
 const app = express();
 const server = http.createServer(app);
 
 const io = new Server(server, {
   cors: {
-    origin: process.env.CLIENT_URL,
+    // Shared strict allowlist — same one used by the Express CORS middleware
+    // below. Socket.IO accepts an array of exact origins (no wildcards).
+    origin: CLIENT_ORIGINS,
     credentials: true,
+  },
+  // The cors option only guards the HTTP polling handshake — engine.io's ws
+  // upgrade path bypasses HTTP CORS entirely, and WebSockets are not subject
+  // to the browser same-origin policy. Enforce the SAME allowlist at the
+  // engine level so direct websocket handshakes from a disallowed origin are
+  // rejected before the socket is created.
+  allowRequest(req, callback) {
+    if (isOriginAllowed(req.headers.origin)) {
+      return callback(null, true);
+    }
+    return callback('origin not allowed', false);
   },
 });
 app.set('io', io);
@@ -51,7 +65,7 @@ app.use(
         styleSrc: ["'self'", "'unsafe-inline'"],
         imgSrc: ["'self'", 'data:', 'blob:', 'https://res.cloudinary.com', 'https://images.unsplash.com', 'https://*.unsplash.com'],
         fontSrc: ["'self'"],
-        connectSrc: ["'self'", process.env.CLIENT_URL || ''].filter(Boolean),
+        connectSrc: ["'self'", ...CLIENT_ORIGINS],
         frameSrc: ["'none'"],
         objectSrc: ["'none'"],
       },
@@ -74,7 +88,7 @@ app.use('/api/checkout', checkoutRoutes);
 
 app.use(
   cors({
-    origin: process.env.CLIENT_URL,
+    origin: CLIENT_ORIGINS,
     credentials: true,
   })
 );
