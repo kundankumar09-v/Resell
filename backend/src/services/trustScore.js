@@ -10,6 +10,13 @@
  *  - Response time (0-15)
  *  - Complaint-free ratio (0-15)
  *  - Listing quality (0-10)
+ *
+ * Trust-gaming defense: the sales component is capped at 50% of its maximum
+ * (10 of 20 points) when a seller's recent sales are concentrated in a small
+ * set of repeat buyers (the same buyers inflating each other's reputations /
+ * self-dealing). Concentration is measured over the last 20 sales; > 60%
+ * repeat buyers triggers the cap. The cap is transparent — the ratio and the
+ * cap flag are exposed in the breakdown.
  */
 
 const User = require('../models/User');
@@ -30,9 +37,28 @@ const calculateTrustScore = async (userId) => {
   const ageInDays = Math.floor((Date.now() - new Date(user.createdAt)) / (1000 * 60 * 60 * 24));
   const ageScore = clamp((ageInDays / 365) * 15, 0, 15);
 
-  // 2. Sales (0-20)
+  // 2. Sales (0-20) with a trust-gaming concentration cap
   const salesCount = await Sale.countDocuments({ seller: userId });
-  const salesScore = clamp(Math.log10(salesCount + 1) * 10, 0, 20);
+  let salesScore = clamp(Math.log10(salesCount + 1) * 10, 0, 20);
+
+  // Repeat-buyer concentration over the 20 most recent sales. A seller whose
+  // recent sales all come from a handful of repeat buyers may be farming
+  // reputation with confederates; cap the sales component at half its max so
+  // the practice can no longer inflate the final score materially.
+  const recentSales = await Sale.find({ seller: userId })
+    .sort({ createdAt: -1 })
+    .limit(20)
+    .select('buyer');
+  let concentrationRatio = 0;
+  let salesConcentrationCapped = false;
+  if (recentSales.length > 0) {
+    const uniqueBuyers = new Set(recentSales.map((s) => String(s.buyer))).size;
+    concentrationRatio = 1 - uniqueBuyers / recentSales.length;
+    if (concentrationRatio > 0.6) {
+      salesScore = clamp(Math.min(salesScore, 10), 0, 20);
+      salesConcentrationCapped = true;
+    }
+  }
 
   // 3. Rating (0-25)
   const reviews = await Review.find({ seller: userId });
@@ -83,7 +109,13 @@ const calculateTrustScore = async (userId) => {
     level,
     breakdown: {
       accountAge: { score: Math.round(ageScore), max: 15, days: ageInDays },
-      sales: { score: Math.round(salesScore), max: 20, count: salesCount },
+      sales: {
+        score: Math.round(salesScore),
+        max: 20,
+        count: salesCount,
+        concentrationRatio: Number(concentrationRatio.toFixed(2)),
+        capped: salesConcentrationCapped,
+      },
       rating: {
         score: Math.round(ratingScore),
         max: 25,

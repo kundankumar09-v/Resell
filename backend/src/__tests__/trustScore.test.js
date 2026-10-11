@@ -162,4 +162,59 @@ describe('trustScore.calculateTrustScore', () => {
     expect(result.score).toBeGreaterThanOrEqual(0);
     expect(result.score).toBeLessThanOrEqual(100);
   });
+
+  it('caps the sales component when recent sales are concentrated in repeat buyers', async () => {
+    const user = await User.create({
+      name: 'Concentrated Seller',
+      email: 'concentrated-seller@test.com',
+      password: 'password123',
+      role: 'seller',
+    });
+    const confederate = new mongoose.Types.ObjectId();
+    // 20 recent sales, every single one to the same repeat buyer.
+    for (let i = 0; i < 20; i++) {
+      await Sale.create({
+        product: new mongoose.Types.ObjectId(),
+        seller: user._id,
+        buyer: confederate,
+        salePrice: 100,
+        netAmount: 100,
+      });
+    }
+
+    const result = await calculateTrustScore(user._id);
+
+    // ratio = 1 - 1/20 = 0.95 > 0.6 -> cap sales at 50% of max (10 points).
+    expect(result.breakdown.sales.count).toBe(20);
+    expect(result.breakdown.sales.concentrationRatio).toBe(0.95);
+    expect(result.breakdown.sales.capped).toBe(true);
+    expect(result.breakdown.sales.score).toBe(10);
+    // Un-capped it would be log10(21)*10 ≈ 13.  Capped: still 10.
+    expect(result.score).toBeLessThan(70); // sales contribution no longer inflated
+  });
+
+  it('does not cap sales when recent buyers are distinct', async () => {
+    const user = await User.create({
+      name: 'Distinct Seller',
+      email: 'distinct-seller@test.com',
+      password: 'password123',
+      role: 'seller',
+    });
+    for (let i = 0; i < 20; i++) {
+      await Sale.create({
+        product: new mongoose.Types.ObjectId(),
+        seller: user._id,
+        buyer: new mongoose.Types.ObjectId(),
+        salePrice: 100,
+        netAmount: 100,
+      });
+    }
+
+    const result = await calculateTrustScore(user._id);
+
+    expect(result.breakdown.sales.count).toBe(20);
+    expect(result.breakdown.sales.concentrationRatio).toBe(0);
+    expect(result.breakdown.sales.capped).toBe(false);
+    expect(result.breakdown.sales.score).toBe(13); // log10(21)*10 ≈ 13.32
+  });
 });

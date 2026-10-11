@@ -275,6 +275,49 @@ describe('Service Unit Tests', () => {
       expect(result.factors.some((f) => f.includes('low'))).toBe(true);
     });
 
+    it('continuous pricing: scales points near the 15% low-price boundary', async () => {
+      const seller = await User.create({
+        name: 'Boundary', email: 'boundary@test.com', password: 'pass123',
+        role: 'seller', createdAt: new Date(Date.now() - 365 * 86400000),
+      });
+      const category = await Category.create({ name: 'Test', slug: 'test-fraud-boundary', icon: 'box' });
+      // 149/1000 = 14.9% -> just below 15%: gets a small nonzero penalty (1pt).
+      const product = await Product.create({
+        title: 'Boundary Product', description: 'Boundary description for fraud test',
+        price: 149, originalPrice: 1000, category: category._id,
+        images: [{ url: 'http://x.com/1.jpg', publicId: 'a' }],
+        seller: seller._id,
+      });
+      const result = await detectRisk({
+        product, hashes: [], aiAnalysis: { damageScore: 0 },
+      });
+      expect(result.factors.some((f) => f.includes('suspiciously low'))).toBe(true);
+      expect(result.riskFactorCategories).toContain('pricing_anomaly');
+      // Only the pricing penalty plus rating/response/complaint baselines.
+      expect(result.riskScore).toBeGreaterThan(0);
+      expect(result.riskScore).toBeLessThan(25);
+    });
+
+    it('continuous pricing: exact 15% ratio gets no low-price penalty', async () => {
+      const seller = await User.create({
+        name: 'Exact Ratio', email: 'exact-ratio@test.com', password: 'pass123',
+        role: 'seller', createdAt: new Date(Date.now() - 365 * 86400000),
+      });
+      const category = await Category.create({ name: 'Test', slug: 'test-fraud-ratio', icon: 'box' });
+      const product = await Product.create({
+        title: 'Exact Ratio Product', description: 'Exact ratio description for fraud test',
+        price: 150, originalPrice: 1000, category: category._id,
+        images: [{ url: 'http://x.com/1.jpg', publicId: 'a' }],
+        seller: seller._id,
+      });
+      const result = await detectRisk({
+        product, hashes: [], aiAnalysis: { damageScore: 0 },
+      });
+      expect(result.factors.some((f) => f.includes('suspiciously low'))).toBe(false);
+      expect(result.factors.some((f) => f.includes('above original'))).toBe(false);
+      expect(result.riskFactorCategories).not.toContain('pricing_anomaly');
+    });
+
     it('flags high-value listing from new account', async () => {
       const seller = await User.create({
         name: 'New Seller', email: 'new@test.com', password: 'pass123',

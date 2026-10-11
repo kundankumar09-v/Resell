@@ -608,7 +608,7 @@ A transparent **0-100 seller trust score** with six independently calculated com
 | Component | Max Points | Calculation |
 |---|---|---|
 | Account Age | 15 | `(days / 365) x 15` — grows linearly over one year |
-| Sales Volume | 20 | `log10(salesCount + 1) x 10` — logarithmic to prevent gaming |
+| Sales Volume | 20 | `log10(salesCount + 1) x 10` — logarithmic to prevent gaming. Capped at 10 (50%) when the last 20 sales are &gt; 60% repeat-buyer concentrated (confederate-reputation guard; ratio + capped flag exposed in the breakdown). |
 | Average Rating | 25 | `(avgRating / 5) x 25` — default 3.5/5 for new sellers |
 | Response Time | 15 | `15 - (avgResponseMinutes / 60) x 5` — faster = higher |
 | Complaint-Free | 15 | `(1 - complaints/20) x 15` — penalizes reports |
