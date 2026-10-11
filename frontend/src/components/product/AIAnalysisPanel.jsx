@@ -3,6 +3,19 @@ import { TrendingUp, Shield, AlertTriangle, Sparkles, Check, Info } from 'lucide
 import { getRiskColor, cn } from '../../utils/format';
 import useFormatPrice from '../../hooks/useFormatPrice';
 
+// Friendly labels for the generalized risk categories. The backend stores
+// coarse categories (riskAssessment.riskFactorCategories) instead of the raw
+// factor strings so internal detection thresholds are never exposed to
+// buyers/sellers; admins see the full factors.
+const RISK_CATEGORY_LABELS = {
+  possible_duplicate_image: 'Photos match another listing',
+  pricing_anomaly: 'Price is unusual for this item',
+  account_risk: 'Seller account shows warning signs',
+  identity_concern: 'Product identity / ownership needs review',
+  content_quality: 'Listing quality needs review',
+  other: 'Additional review recommended',
+};
+
 // Condition-score semantics (matches the backend contract):
 //   0/absent = no visual evidence; 30-100 is the meaningful range
 //   (100 = like-new, lower = worse).
@@ -211,10 +224,27 @@ export default function AIAnalysisPanel({ aiAnalysis, currencyCode }) {
             </div>
             <span className="text-sm font-bold text-slate-900">{risk.riskScore || 0}/100</span>
           </div>
-          {risk.factors && risk.factors.length > 0 && (
-            <div className="mt-3 flex items-start gap-2 text-xs text-amber-700 bg-amber-50 rounded-lg p-2">
-              <AlertTriangle className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
-              <span>{risk.factors[0]}</span>
+          {/* Owner-facing risk summary uses the generalized categories so
+              internal detection thresholds (embedded in the raw factor
+              strings) are never exposed. Admins see the full factors. */}
+          {(risk.riskFactorCategories?.length > 0 || risk.factors?.length > 0) && (
+            <div className="mt-3 space-y-1.5">
+              {risk.riskFactorCategories && risk.riskFactorCategories.length > 0 ? (
+                risk.riskFactorCategories.map((cat) => (
+                  <div
+                    key={cat}
+                    className="flex items-start gap-2 text-xs text-amber-700 bg-amber-50 rounded-lg p-2"
+                  >
+                    <AlertTriangle className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
+                    <span>{RISK_CATEGORY_LABELS[cat] || RISK_CATEGORY_LABELS.other}</span>
+                  </div>
+                ))
+              ) : (
+                <div className="flex items-start gap-2 text-xs text-amber-700 bg-amber-50 rounded-lg p-2">
+                  <AlertTriangle className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
+                  <span>{risk.factors[0]}</span>
+                </div>
+              )}
             </div>
           )}
         </div>

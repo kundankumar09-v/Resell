@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, Fragment } from 'react';
 import { motion } from 'framer-motion';
 import { Search, Eye, Flag, CheckCircle, XCircle, AlertTriangle, ShieldCheck, ShieldAlert, Sparkles } from 'lucide-react';
 import { Link } from 'react-router-dom';
@@ -17,6 +17,7 @@ export default function AdminProducts() {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [flagFilter, setFlagFilter] = useState('');
+  const [expandedId, setExpandedId] = useState(null);
 
   useEffect(() => {
     load();
@@ -155,7 +156,8 @@ export default function AdminProducts() {
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                 {items.map((p) => (
-                  <tr key={p._id} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
+                  <Fragment key={p._id}>
+                  <tr className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
                     <td className="p-3">
                       <div className="flex items-center gap-3">
                         <img
@@ -219,6 +221,17 @@ export default function AdminProducts() {
                     </td>
                     <td className="p-3 text-right">
                       <div className="flex items-center justify-end gap-1">
+                        <button
+                          onClick={() => setExpandedId(expandedId === p._id ? null : p._id)}
+                          title="Full AI Risk Detail"
+                          className={`inline-flex p-1.5 rounded hover:bg-slate-100 dark:hover:bg-slate-800 ${
+                            expandedId === p._id
+                              ? 'text-brand-600 dark:text-brand-400 bg-slate-100 dark:bg-slate-800'
+                              : 'text-slate-400'
+                          }`}
+                        >
+                          <ShieldCheck className="w-4 h-4" />
+                        </button>
                         <Link
                           to={`/product/${p._id}`}
                           title="View Listing"
@@ -255,6 +268,51 @@ export default function AdminProducts() {
                       </div>
                     </td>
                   </tr>
+                  {expandedId === p._id && (
+                    <tr className="bg-slate-50 dark:bg-slate-800/30">
+                      <td colSpan={5} className="p-3">
+                        <div className="grid md:grid-cols-2 gap-4 text-sm">
+                          <div>
+                            <div className="text-xs font-medium text-slate-500 uppercase tracking-wide mb-1.5">
+                              Full AI Risk Factors
+                            </div>
+                            {p.aiAnalysis?.riskAssessment?.factors?.length ? (
+                              <ul className="space-y-1">
+                                {p.aiAnalysis.riskAssessment.factors.map((f, i) => (
+                                  <li key={i} className="text-xs text-slate-700 dark:text-slate-300 flex items-start gap-1.5">
+                                    <span className="text-red-500 mt-0.5">•</span>
+                                    {f}
+                                  </li>
+                                ))}
+                              </ul>
+                            ) : (
+                              <p className="text-xs text-slate-500">No factors recorded.</p>
+                            )}
+                          </div>
+                          <div>
+                            <div className="text-xs font-medium text-slate-500 uppercase tracking-wide mb-1.5">
+                              Risk Categories
+                            </div>
+                            {p.aiAnalysis?.riskAssessment?.riskFactorCategories?.length ? (
+                              <div className="flex flex-wrap gap-1.5">
+                                {p.aiAnalysis.riskAssessment.riskFactorCategories.map((cat) => (
+                                  <span
+                                    key={cat}
+                                    className="badge bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300 text-[11px]"
+                                  >
+                                    {cat}
+                                  </span>
+                                ))}
+                              </div>
+                            ) : (
+                              <p className="text-xs text-slate-500">No categories recorded.</p>
+                            )}
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                  </Fragment>
                 ))}
               </tbody>
             </table>
