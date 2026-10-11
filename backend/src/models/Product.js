@@ -148,6 +148,12 @@ const productSchema = new mongoose.Schema(
       visualAnalysisAvailable: { type: Boolean, default: false },
       damageDescription: { type: String, default: '' },
       imageHashes: [{ type: String }], // Legacy - keeping for backward compatibility
+      // Rotation (90/180/270) and vertical-flip perceptual hashes extend the
+      // flat imageHashes list (which carries normal + mirror entries) so
+      // rotated / upside-down re-uploads are caught too. Stored side-by-side
+      // in aiAnalysis; the fraud engine compares the full hash set.
+      rotationHashes: [{ type: String }],
+      vflipHash: [{ type: String }],
       // SCRUM-31: true when any stored hash came from the client echo rather
       // than a server-side upload record (legacy images) — the fraud engine
       // can weight unverified hashes accordingly.
@@ -176,6 +182,10 @@ const productSchema = new mongoose.Schema(
         riskScore: { type: Number, default: 0, min: 0, max: 100 },
         riskLevel: { type: String, enum: ['low', 'medium', 'high'], default: 'low' },
         factors: [{ type: String }],
+        // Generalized categories derived from the detailed factors. These are
+        // what non-admin surfaces see — the exact factor strings (which expose
+        // internal thresholds) stay admin-only.
+        riskFactorCategories: [{ type: String }],
         assessedAt: { type: Date, default: Date.now },
       },
       lastAnalyzedAt: { type: Date, default: Date.now },

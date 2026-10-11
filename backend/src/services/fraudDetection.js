@@ -26,6 +26,46 @@ const {
 
 const clamp = (val, min, max) => Math.max(min, Math.min(max, val));
 
+// Generalized risk categories exposed to non-admin surfaces. The detailed
+// factor strings expose internal thresholds (e.g. "<15% of original price");
+// buyers/sellers only see these coarse categories, while admins see the full
+// factors. Kept exhaustive via the 'other' fallback.
+const RISK_FACTOR_CATEGORIES = [
+  'possible_duplicate_image',
+  'pricing_anomaly',
+  'account_risk',
+  'identity_concern',
+  'content_quality',
+  'other',
+];
+
+const mapFactorToCategory = (factor) => {
+  const f = String(factor || '');
+  if (/duplicate image|visual product similarity/i.test(f)) return 'possible_duplicate_image';
+  if (/price|suspiciously low|above original/i.test(f)) return 'pricing_anomaly';
+  if (/new account|reports against/i.test(f)) return 'account_risk';
+  if (/identifier|ownership|possession|provenance|stolen/i.test(f)) return 'identity_concern';
+  if (/description|damage|quality/i.test(f)) return 'content_quality';
+  return 'other';
+};
+
+/**
+ * Build the full 64-bit pHash set for a product's stored analysis: normal,
+ * mirror, rotation (90/180/270) and vertical-flip entries. Guarantees every
+ * duplicate check compares the complete hash set regardless of which fields
+ * a document was written with (older rows have only imageHashes).
+ */
+const collectHashSet = (aiAnalysis = {}) => [
+  ...new Set(
+    [
+      ...(Array.isArray(aiAnalysis?.imageHashes) ? aiAnalysis.imageHashes : []),
+      ...(Array.isArray(aiAnalysis?.mirrorHashes) ? aiAnalysis.mirrorHashes : []),
+      ...(Array.isArray(aiAnalysis?.rotationHashes) ? aiAnalysis.rotationHashes : []),
+      ...(Array.isArray(aiAnalysis?.vflipHash) ? aiAnalysis.vflipHash : [aiAnalysis?.vflipHash]),
+    ].filter(Boolean)
+  ),
+];
+
 // Maximum hamming distance to consider two 64-bit perceptual hashes as "similar".
 // Threshold of 12 validated against real photographs: catches all crop/recompress
 // variants (max observed distance = 12) while producing zero false positives on
@@ -82,8 +122,14 @@ const detectRisk = async ({ product, hashes = [], aiAnalysis = {}, identitySigna
   };
 
   // 1. Duplicate image risk — similarity-based via perceptual hashing
-  if (hashes && hashes.length > 0 && !sameOwnerRelist) {
-    // Fetch candidate products in the same category (or all if no category)
+  //    Compare the FULL hash set (normal + mirror + rotation + vertical-flip)
+  //    on both sides: an upload rotated 90° can only match the original when
+  //    the original's stored rotation hashes are compared as well.
+  //    Fallback to the legacy `hashes` arg when aiAnalysis carries no hashes
+  //    (callers that pass bare aiAnalysis keep the old probe set).
+  const collectedHashes = collectHashSet(aiAnalysis);
+  const probeHashes = collectedHashes.length > 0 ? collectedHashes : hashes;
+  if (probeHashes.length > 0 && !sameOwnerRelist) {
     const candidateFilter = {
       _id: { $ne: product._id },
       status: { $in: ['active', 'sold'] },
@@ -94,10 +140,10 @@ const detectRisk = async ({ product, hashes = [], aiAnalysis = {}, identitySigna
 
     // Limit to recent 500 candidates to keep memory usage bounded
     const candidates = await Product.find(candidateFilter)
-      .select('title aiAnalysis.imageHashes')
+      .select('title aiAnalysis.imageHashes aiAnalysis.rotationHashes aiAnalysis.vflipHash')
       .limit(500);
 
-    for (const hash of hashes) {
+    for (const hash of probeHashes) {
       let duplicateFound = false;
       for (const candidate of candidates) {
         if (
@@ -107,7 +153,7 @@ const detectRisk = async ({ product, hashes = [], aiAnalysis = {}, identitySigna
           continue;
         }
 
-        const candidateHashes = candidate.aiAnalysis?.imageHashes || [];
+        const candidateHashes = collectHashSet(candidate.aiAnalysis);
         for (const candidateHash of candidateHashes) {
           const distance = hammingDistance(hash, candidateHash);
           // null = non-pHash entry (e.g. sha256 fallback) — skip, never compare.
@@ -127,19 +173,31 @@ const detectRisk = async ({ product, hashes = [], aiAnalysis = {}, identitySigna
     }
   }
 
-  // 2. Suspicious pricing
+  // 2. Suspicious pricing — continuous graduated scale instead of a single
+  //    binary threshold. The low-price penalty ramps linearly from 0 at 15% of
+  //    original MSRP up to 25 at 0%; the above-original penalty ramps 0..10.
+  //    Ceil is used so a listing just under the threshold still earns points
+  //    (e.g. 14.9% -> 1pt), keeping the signal continuous at the boundary.
   const sellerAccountAgeDays = product.seller?.createdAt
     ? Math.floor((Date.now() - new Date(product.seller.createdAt)) / (1000 * 60 * 60 * 24))
     : 0;
 
   if (product.originalPrice > 0 && product.price > 0) {
     const priceRatio = product.price / product.originalPrice;
-    if (priceRatio < 0.15) {
-      riskScore += 25;
+    const lowPricePoints = clamp(Math.ceil((0.15 - priceRatio) * 250), 0, 25);
+    if (lowPricePoints > 0) {
+      riskScore += lowPricePoints;
       factors.push('Price is suspiciously low (<15% of original price)');
-    } else if (priceRatio > 1.5) {
-      riskScore += 10;
-      factors.push('Price is significantly above original price');
+    } else {
+      const highPricePoints = clamp(
+        Math.min(10, Math.ceil((priceRatio - 1.5) * 20)),
+        0,
+        10
+      );
+      if (highPricePoints > 0) {
+        riskScore += highPricePoints;
+        factors.push('Price is significantly above original price');
+      }
     }
   }
 
@@ -233,6 +291,9 @@ const detectRisk = async ({ product, hashes = [], aiAnalysis = {}, identitySigna
     riskScore,
     riskLevel,
     factors,
+    // Generalized categories for non-admin surfaces (full factors stay
+    // admin-only to avoid exposing internal thresholds).
+    riskFactorCategories: [...new Set(factors.map(mapFactorToCategory))],
   };
 };
 
@@ -314,6 +375,9 @@ const assessVisualSimilarity = async ({ productId, excludeProductId }) => {
 module.exports = {
   detectRisk,
   assessVisualSimilarity,
+  collectHashSet,
+  RISK_FACTOR_CATEGORIES,
+  mapFactorToCategory,
   VISUAL_PRODUCT_SIMILARITY_SIGNAL,
   VISUAL_SIGNAL_WEIGHTS: IDENTITY_SIGNAL_WEIGHTS,
 };

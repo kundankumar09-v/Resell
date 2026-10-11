@@ -175,9 +175,90 @@ const mirrorPerceptualHashFromBuffer = async (imageBuffer) => {
   }
 };
 
+/**
+ * Perceptual hash of the image rotated `degrees` clockwise (90/180/270).
+ *
+ * Simple image transformations defeat the plain DCT hash — a rotated copy
+ * of an item photo has a very different hash from the original. Hashing the
+ * rotated variants as well lets duplicate checks catch 90°/180°/270° rotated
+ * re-uploads: an upload's own rotated hash matches the original's stored
+ * rotation hash for the same angle.
+ *
+ * Falls back to the plain hash when sharp is unavailable (no extra false
+ * positives, just no rotation coverage) — same contract as the mirror hash.
+ */
+const rotatePerceptualHashFromBuffer = async (imageBuffer, degrees = 90) => {
+  try {
+    let sharp;
+    try {
+      sharp = require('sharp');
+    } catch {
+      sharp = null;
+    }
+
+    if (!sharp) {
+      return perceptualHashFromBuffer(imageBuffer);
+    }
+
+    const rotated = await sharp(imageBuffer).rotate(degrees).png().toBuffer();
+    return perceptualHashFromBuffer(rotated);
+  } catch (err) {
+    return perceptualHashFromBuffer(imageBuffer);
+  }
+};
+
+/**
+ * Perceptual hash of the vertically flipped image (upside-down).
+ *
+ * Mirrors the horizontal mirror hash: a vertically flipped copy evades the
+ * plain pHash, so the flipped variant is hashed alongside the original so
+ * duplicate checks can catch it. sharp.flip() = vertical axis (flop() is
+ * the horizontal mirror covered by mirrorPerceptualHashFromBuffer).
+ *
+ * Falls back to the plain hash when sharp is unavailable.
+ */
+const verticalFlipPerceptualHashFromBuffer = async (imageBuffer) => {
+  try {
+    let sharp;
+    try {
+      sharp = require('sharp');
+    } catch {
+      sharp = null;
+    }
+
+    if (!sharp) {
+      return perceptualHashFromBuffer(imageBuffer);
+    }
+
+    const flipped = await sharp(imageBuffer).flip().png().toBuffer();
+    return perceptualHashFromBuffer(flipped);
+  } catch (err) {
+    return perceptualHashFromBuffer(imageBuffer);
+  }
+};
+
+/**
+ * Compute the full orientation hash set for an image in one call:
+ * plain, mirror, rotate90, rotate180, rotate270, vertical-flip.
+ * Returns { rotationHashes: [r90, r180, r270], vflipHash } (vflipHash is a
+ * string; callers aggregate per-image vflips into arrays on the product).
+ */
+const orientationHashesFromBuffer = async (imageBuffer) => {
+  const [r90, r180, r270, vflipHash] = await Promise.all([
+    rotatePerceptualHashFromBuffer(imageBuffer, 90),
+    rotatePerceptualHashFromBuffer(imageBuffer, 180),
+    rotatePerceptualHashFromBuffer(imageBuffer, 270),
+    verticalFlipPerceptualHashFromBuffer(imageBuffer),
+  ]);
+  return { rotationHashes: [r90, r180, r270], vflipHash };
+};
+
 module.exports = {
   perceptualHashFromBuffer,
   mirrorPerceptualHashFromBuffer,
+  rotatePerceptualHashFromBuffer,
+  verticalFlipPerceptualHashFromBuffer,
+  orientationHashesFromBuffer,
   hammingDistance,
   similarity,
 };

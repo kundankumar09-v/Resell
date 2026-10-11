@@ -26,6 +26,10 @@ const imageUploadRecordSchema = new mongoose.Schema(
     url: { type: String, default: '' },
     hash: { type: String, default: null },
     mirrorHash: { type: String, default: null },
+    // Rotation (90/180/270) and vertical-flip hashes computed at upload time —
+    // persisted server-side so createProduct never trusts client echo for these.
+    rotationHashes: { type: [String], default: [] },
+    vflipHash: { type: String, default: null },
   },
   { timestamps: true }
 );

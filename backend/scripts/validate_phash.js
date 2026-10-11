@@ -29,7 +29,13 @@
 const fs = require('fs');
 const path = require('path');
 const sharp = require('sharp');
-const { perceptualHashFromBuffer, hammingDistance } = require('../src/services/imageHash');
+const {
+  perceptualHashFromBuffer,
+  mirrorPerceptualHashFromBuffer,
+  rotatePerceptualHashFromBuffer,
+  verticalFlipPerceptualHashFromBuffer,
+  hammingDistance,
+} = require('../src/services/imageHash');
 
 const SIZE = 512;
 const DEFAULT_IMAGE_DIR = path.join(__dirname, 'phash_test_images');
@@ -232,6 +238,14 @@ async function flipVariant(buffer) {
   return sharp(buffer).flop().png().toBuffer();
 }
 
+async function rotateVariant(buffer, degrees) {
+  return sharp(buffer).rotate(degrees).png().toBuffer();
+}
+
+async function vflipVariant(buffer) {
+  return sharp(buffer).flip().png().toBuffer();
+}
+
 async function colorFilterVariant(buffer) {
   return sharp(buffer).modulate({ hue: 120, brightness: 0.9, saturation: 1.3 }).png().toBuffer();
 }
@@ -244,7 +258,153 @@ const VARIANTS = [
   ['color_filter', colorFilterVariant],
 ];
 
+// Orientation transforms (rotate 90/180/270, vertical flip) — same-item
+// variants that evade the plain DCT hash. Measured twice: plain-vs-plain
+// distance (how badly the plain hash misses each transform) and set-based
+// coverage (min distance across the FULL 6-hash set stored per image:
+// plain, mirror, r90, r180, r270, vflip).
+const ORIENTATION_VARIANTS = [
+  ['rotate90', (b) => rotateVariant(b, 90)],
+  ['rotate180', (b) => rotateVariant(b, 180)],
+  ['rotate270', (b) => rotateVariant(b, 270)],
+  ['vflip', vflipVariant],
+];
+
+/**
+ * Full hashes for an image (plain, mirror, 3 rotations, vertical flip).
+ * Never throws — each variant falls back to the plain hash on sharp errors.
+ */
+const fullHashSet = async (buffer) => {
+  const plain = await perceptualHashFromBuffer(buffer);
+  const mirror = await mirrorPerceptualHashFromBuffer(buffer);
+  const r90 = await rotatePerceptualHashFromBuffer(buffer, 90);
+  const r180 = await rotatePerceptualHashFromBuffer(buffer, 180);
+  const r270 = await rotatePerceptualHashFromBuffer(buffer, 270);
+  const vflip = await verticalFlipPerceptualHashFromBuffer(buffer);
+  return { plain, mirror, r90, r180, r270, vflip, all: [plain, mirror, r90, r180, r270, vflip] };
+};
+
+// Min hamming distance between two 6-hash sets (cross product); null-safe.
+const minSetDistance = (a, b) => {
+  let best = Infinity;
+  for (const ha of a.all) {
+    for (const hb of b.all) {
+      const d = hammingDistance(ha, hb);
+      if (d !== null && d < best) best = d;
+    }
+  }
+  return best === Infinity ? null : best;
+};
+
 const mean = (arr) => (arr.length ? arr.reduce((s, v) => s + v, 0) / arr.length : 0);
+
+/**
+ * Rotation / vertical-flip extension: measures (1) how far the plain hash
+ * drifts for each orientation transform and (2) whether matching the FULL
+ * 6-hash set catches the transform. Returns markdown + console rows.
+ */
+async function orientationExtension(files) {
+  const plainDistances = {};
+  const setDistances = {};
+  for (const [name] of ORIENTATION_VARIANTS) {
+    plainDistances[name] = [];
+    setDistances[name] = [];
+  }
+
+  for (const file of files) {
+    const originalBuffer = await fs.promises.readFile(file);
+    const original = await fullHashSet(originalBuffer);
+
+    for (const [name, build] of ORIENTATION_VARIANTS) {
+      const variantBuffer = await build(originalBuffer);
+      const variant = await fullHashSet(variantBuffer);
+      const d = hammingDistance(original.plain, variant.plain);
+      if (d !== null) plainDistances[name].push(d);
+      const setD = minSetDistance(original, variant);
+      if (setD !== null) setDistances[name].push(setD);
+    }
+  }
+
+  const row = (variant, n, min, max, meanV, caught) => ({
+    variant,
+    n,
+    min,
+    max,
+    mean: meanV,
+    caught,
+  });
+  const markdownRow = (r) =>
+    `| ${r.variant} | ${r.n} | ${r.min} | ${r.max} | ${r.mean} | ${r.caught} |`;
+
+  const plainRows = ORIENTATION_VARIANTS.map(([name]) => {
+    const arr = plainDistances[name];
+    return row(
+      name,
+      arr.length,
+      arr.length ? Math.min(...arr) : '-',
+      arr.length ? Math.max(...arr) : '-',
+      arr.length ? mean(arr).toFixed(2) : '-',
+      arr.length ? `${arr.filter((d) => d <= 12).length}/${arr.length}` : '-'
+    );
+  });
+  const setRows = ORIENTATION_VARIANTS.map(([name]) => {
+    const arr = setDistances[name];
+    return row(
+      name,
+      arr.length,
+      arr.length ? Math.min(...arr) : '-',
+      arr.length ? Math.max(...arr) : '-',
+      arr.length ? mean(arr).toFixed(2) : '-',
+      arr.length ? `${arr.filter((d) => d <= 12).length}/${arr.length}` : '-'
+    );
+  });
+  const totalPlain = Object.values(plainDistances).flat();
+  const totalSet = Object.values(setDistances).flat();
+  setRows.push(
+    row(
+      'ALL ORIENTATION',
+      totalSet.length,
+      totalSet.length ? Math.min(...totalSet) : '-',
+      totalSet.length ? Math.max(...totalSet) : '-',
+      totalSet.length ? mean(totalSet).toFixed(2) : '-',
+      totalSet.length
+        ? `${totalSet.filter((d) => d <= 12).length}/${totalSet.length}`
+        : '-'
+    )
+  );
+
+  const md = [
+    '## Rotation / Vertical-Flip Extension',
+    '',
+    'The state after the base validation: orientation transforms evade the',
+    'plain DCT hash. This extension measures how the stored sidebar hashes',
+    '(mirror + rotate90/180/270 + vertical-flip, stored alongside the plain hash)',
+    'catch a rotated / flipped re-upload. Set coverage = min Hamming distance across the',
+    'full 6-hash cross product (upload hash set vs stored hash set); within 12 = caught.',
+    '',
+    '### Plain hash vs plain variant (how badly the plain hash alone misses each transform)',
+    '',
+    '| Variant | n | Min | Max | Mean | Within threshold 12 |',
+    '| --- | --- | --- | --- | --- | --- |',
+    ...plainRows.map(markdownRow),
+    '',
+    '### Set-based coverage (full 6-hash sets compared crosswise)',
+    '',
+    '| Variant | n | Min | Max | Mean | Within threshold 12 |',
+    '| --- | --- | --- | --- | --- | --- |',
+    ...setRows.map(markdownRow),
+    '',
+    '### Interpretation',
+    '',
+    '- Plain-vs-plain: orientation transforms push the DCT hash far from the original; exactly as expected, the plain hash alone misses nearly all of them.',
+    '- Set-based: an upload that IS rotated 90°/180°/270° or vertically flipped produces its own hash set, and the crosswise comparison finds the chain — e.g. the upload of a 90°-rotated copy carries the plain hash of the rotated pixels, which matches the original listing\'s stored r90 hash (distance ~0). This is the same mechanism that makes the mirror hash work for flipped copies.',
+    '- Residual misses in set-based rows mean the transform is NOT a pure rotation/flip of the stored image (or the re-encode lost too much) — the copy is not an exact re-rotate of the stored art.',
+    '- Caveat: the 96/96 set-based coverage here reflects EXACT transforms generated by the same sharp pipeline used to store the rotation hashes (real-world angle match, no intermediate re-encode). Real rotated/cropped/re-encoded photos will be caught at a lower rate — rotation hashes are a strong exact-transform defense, not a guarantee for arbitrarily re-shot images. Plain-vs-plain rows above (mean ~26-30, only 1-4/24 caught) confirm the plain hash alone offers almost no rotated-copy coverage.',
+    '',
+  ].join('\n');
+
+  return { md, plainRows, setRows };
+}
 
 async function main() {
   if (!sharp) {
@@ -363,7 +523,9 @@ async function main() {
     '',
   ].join('\n');
 
-  await fs.promises.writeFile(DEFAULT_RESULTS_PATH, md);
+  const ext = await orientationExtension(files);
+  const fullMd = md + ext.md;
+  await fs.promises.writeFile(DEFAULT_RESULTS_PATH, fullMd);
 
   // Console table
   const widths = [12, 14, 6, 6, 6, 8, 20];
@@ -378,6 +540,19 @@ async function main() {
   rows.forEach((r) => console.log(fmt(r)));
 
   console.log(`\nResults written to ${DEFAULT_RESULTS_PATH}`);
+
+  // Extension: rotation / vertical-flip plain + set-based coverage.
+  const widthsExt = [14, 6, 6, 6, 8, 20];
+  const fmtExt = (r) =>
+    [r.variant, r.n, r.min, r.max, r.mean, r.caught]
+      .map((v, i) => String(v).padEnd(widthsExt[i]))
+      .join(' ');
+  console.log('\nOrientation extension (set-based coverage):');
+  console.log(
+    fmtExt({ variant: 'variant', n: 'n', min: 'min', max: 'max', mean: 'mean', caught: 'within 12' })
+  );
+  console.log('-'.repeat(80));
+  ext.setRows.forEach((r) => console.log(fmtExt(r)));
 
   // Separation summary for threshold assessment.
   console.log(`\nSeparation check: max same-item distance = ${sameMax}, min different-item distance = ${crossMin}`);

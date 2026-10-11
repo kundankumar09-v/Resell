@@ -5,6 +5,7 @@ const Category = require('../models/Category');
 const {
   perceptualHashFromBuffer,
   mirrorPerceptualHashFromBuffer,
+  orientationHashesFromBuffer,
 } = require('../services/imageHash');
 const { createCVProvider } = require('../services/cvAdapter');
 const { extractColorHistogram, downloadImageBuffer } = require('../services/imageUtils');
@@ -50,6 +51,7 @@ const { detectRisk } = require('../services/fraudDetection');
         // Reuse the existing URL/publicId instead of uploading again.
         const hash = await perceptualHashFromBuffer(buffer);
         const mirrorHash = await mirrorPerceptualHashFromBuffer(buffer);
+        const { rotationHashes, vflipHash } = await orientationHashesFromBuffer(buffer);
 
         // Extract color histogram
         const colorHistogram = await extractColorHistogram(buffer);
@@ -68,6 +70,8 @@ const { detectRisk } = require('../services/fraudDetection');
           publicId: image.publicId,
           hash,
           mirrorHash,
+          rotationHashes,
+          vflipHash,
           colorHistogram,
           analysis: {
             conditionScore: condition.score,
@@ -245,15 +249,25 @@ const { detectRisk } = require('../services/fraudDetection');
       const flagReason = mlFraud.fraudReasons?.length > 0 ? mlFraud.fraudReasons.join('; ') : '';
 
       // Preserve previously stored hashes — the edit path may have stored
-      // mirror hashes, and overwriting here would silently erase them
-      // (data loss on every background run). Merge: keep all existing
-      // entries, add the new unique normal + mirror hashes.
+      // mirror/rotation/vflip hashes, and overwriting here would silently erase
+      // them (data loss on every background run). Merge: keep all existing
+      // entries, add the new unique normal + mirror + orientation hashes.
       const stored = await Product.findById(productId)
-        .select('aiAnalysis.imageHashes')
+        .select('aiAnalysis.imageHashes aiAnalysis.rotationHashes aiAnalysis.vflipHash')
         .lean();
       const newHashes = results.flatMap((r) => [r.hash, r.mirrorHash]).filter(Boolean);
       const mergedHashes = [
         ...new Set([...(stored?.aiAnalysis?.imageHashes || []), ...newHashes]),
+      ];
+      const newRotations = results.flatMap((r) => r.rotationHashes || []).filter(Boolean);
+      const mergedRotations = [
+        ...new Set([...(stored?.aiAnalysis?.rotationHashes || []), ...newRotations]),
+      ];
+      const newVflips = results
+        .flatMap((r) => (r.vflipHash ? [r.vflipHash] : []))
+        .filter(Boolean);
+      const mergedVflips = [
+        ...new Set([...(stored?.aiAnalysis?.vflipHash || []), ...newVflips]),
       ];
 
       const product = await Product.findByIdAndUpdate(
@@ -288,6 +302,8 @@ const { detectRisk } = require('../services/fraudDetection');
             visualAnalysisAvailable: avgCondition !== null || avgDamage !== null,
             damageDescription: '',
             imageHashes: mergedHashes,
+            rotationHashes: mergedRotations,
+            vflipHash: mergedVflips,
             priceRecommendation: {
               recommendedPrice: finalSuggestedPrice,
               minPrice: finalPriceRange.min,
@@ -433,6 +449,7 @@ const { detectRisk } = require('../services/fraudDetection');
           riskScore: risk.riskScore,
           riskLevel: risk.riskLevel,
           factors: risk.factors,
+          riskFactorCategories: risk.riskFactorCategories,
           assessedAt: new Date(),
         };
 

@@ -11,12 +11,13 @@ const { uploadToCloudinary, deleteFromCloudinary } = require('../config/cloudina
 const {
   perceptualHashFromBuffer,
   mirrorPerceptualHashFromBuffer,
+  orientationHashesFromBuffer,
   hammingDistance,
 } = require('../services/imageHash');
 const computerVision = require('../services/computerVision');
 const SHARED_LIMITS = require('../constants');
 const { calculateRecommendedPrice } = require('../services/priceRecommendation');
-const { detectRisk } = require('../services/fraudDetection');
+const { detectRisk, collectHashSet } = require('../services/fraudDetection');
 const {
   verifyOwnershipForListing,
   verifyPossession,
@@ -168,16 +169,19 @@ const uploadImages = async (req, res, next) => {
       throw new AppError('No images provided', 400, 'NO_FILES');
     }
 
-    // Phase 1: Compute perceptual hashes (normal + mirrored variant) for ALL
-    // incoming images before any Cloudinary upload. This ensures we can reject
-    // duplicates without leaving orphaned files on Cloudinary. The mirrored
-    // hash counters the flipped-image evasion tactic: a mirrored stolen
-    // upload's own hash matches the original's mirror hash.
+    // Phase 1: Compute perceptual hashes (normal + mirrored + rotation +
+    // vertical-flip variants) for ALL incoming images before any Cloudinary
+    // upload. This ensures we can reject duplicates without leaving orphaned
+    // files on Cloudinary. The mirrored hash counters the flipped-image
+    // evasion tactic; the rotation/vflip hashes counter rotated and
+    // upside-down re-uploads: a rotated stolen upload's own hash matches the
+    // original's stored rotation hash for the same angle.
     const fileHashes = [];
     for (const file of req.files) {
       const hash = await perceptualHashFromBuffer(file.buffer);
       const mirrorHash = await mirrorPerceptualHashFromBuffer(file.buffer);
-      fileHashes.push({ file, hash, mirrorHash });
+      const { rotationHashes, vflipHash } = await orientationHashesFromBuffer(file.buffer);
+      fileHashes.push({ file, hash, mirrorHash, rotationHashes, vflipHash });
     }
 
     // Phase 2: Check each hash against existing active/sold products.
@@ -187,25 +191,28 @@ const uploadImages = async (req, res, next) => {
     // seller scope the check away from the listing that holds the
     // original image. Limited to 500 candidates for performance.
     //
-    // BOTH hashes are probed against every stored entry. Stored
-    // aiAnalysis.imageHashes is a flat list intentionally mixing normal and
-    // mirror entries: incoming-normal vs stored-mirror catches flipped
-    // re-uploads of fixed rows; incoming-mirror vs stored-normal catches
-    // legacy rows that never stored mirrors.
-    for (const { hash, mirrorHash } of fileHashes) {
+    // The FULL hash set is probed against every stored entry's full hash
+    // set — stored aiAnalysis.imageHashes is a flat list mixing normal and
+    // mirror entries; rotationHashes/vflipHash hold the orientation
+    // variants. Incoming-normal vs stored-mirror catches flipped re-uploads
+    // of fixed rows; incoming-mirror vs stored-normal catches legacy rows
+    // that never stored mirrors; incoming-rotated vs stored-rotation
+    // catches rotated re-uploads of any row.
+    for (const { hash, mirrorHash, rotationHashes, vflipHash } of fileHashes) {
       const candidateFilter = {
         status: { $in: ['active', 'sold'] },
         'aiAnalysis.imageHashes': { $exists: true, $ne: [] },
       };
 
       const candidates = await Product.find(candidateFilter)
-        .select('title seller aiAnalysis.imageHashes')
+        .select('title seller aiAnalysis.imageHashes aiAnalysis.rotationHashes aiAnalysis.vflipHash')
         .limit(500);
 
-      for (const probe of [hash, mirrorHash]) {
+      const probeSet = [hash, mirrorHash, ...(rotationHashes || []), vflipHash].filter(Boolean);
+      for (const probe of probeSet) {
         if (!probe) continue;
         for (const candidate of candidates) {
-          const candidateHashes = candidate.aiAnalysis?.imageHashes || [];
+          const candidateHashes = collectHashSet(candidate.aiAnalysis);
           for (const candidateHash of candidateHashes) {
             const distance = hammingDistance(probe, candidateHash);
             // null = non-pHash entry (e.g. sha256 fallback) — skip, never compare.
@@ -231,6 +238,8 @@ const uploadImages = async (req, res, next) => {
         const stored = fileHashes.find((fh) => fh.file === file) || {};
         const hash = stored.hash;
         const mirrorHash = stored.mirrorHash;
+        const rotationHashes = stored.rotationHashes || [];
+        const vflipHash = stored.vflipHash || '';
 
         // CV analysis
         const [condition, damage, classification] = await Promise.all([
@@ -249,6 +258,8 @@ const uploadImages = async (req, res, next) => {
           height: uploaded.height,
           hash,
           mirrorHash,
+          rotationHashes,
+          vflipHash,
           analysis: {
             conditionScore: condition.score,
             damageScore: damage.score,
@@ -308,6 +319,8 @@ const uploadImages = async (req, res, next) => {
                 url: r.url,
                 hash: r.hash || null,
                 mirrorHash: r.mirrorHash || null,
+                rotationHashes: r.rotationHashes || [],
+                vflipHash: r.vflipHash || null,
               },
             },
             upsert: true,
@@ -329,6 +342,8 @@ const uploadImages = async (req, res, next) => {
         height: r.height,
         hash: r.hash,
         mirrorHash: r.mirrorHash,
+        rotationHashes: r.rotationHashes,
+        vflipHash: r.vflipHash,
       })),
       analysis: {
         conditionScore: avgCondition !== null ? Math.round(avgCondition) : null,
@@ -485,7 +500,7 @@ const createProduct = async (req, res, next) => {
     const publicIds = images.map((img) => img?.publicId).filter(Boolean);
     const uploadRecords = publicIds.length
       ? await ImageUploadRecord.find({ user: req.user._id, publicId: { $in: publicIds } })
-          .select('publicId hash mirrorHash')
+          .select('publicId hash mirrorHash rotationHashes vflipHash')
           .lean()
       : [];
     const recordByPublicId = new Map(uploadRecords.map((r) => [r.publicId, r]));
@@ -498,6 +513,8 @@ const createProduct = async (req, res, next) => {
           ...img,
           hash: record.hash,
           mirrorHash: record.mirrorHash || null,
+          rotationHashes: record.rotationHashes || [],
+          vflipHash: record.vflipHash || '',
         };
       }
       if (img?.hash || img?.mirrorHash) hashesUnverified = true;
@@ -608,6 +625,15 @@ const createProduct = async (req, res, next) => {
         // exists (client echo ignored); legacy images without a server-side
         // hash fall back to the echoed value with hashesUnverified=true.
         imageHashes: resolvedImages.flatMap((i) => [i?.hash, i?.mirrorHash]).filter(Boolean),
+        // Rotation/vflip hashes are stored in their own arrays (never mixed
+        // into the flat imageHashes list, whose length contract is
+        // normal+mirror per image).
+        rotationHashes: resolvedImages
+          .flatMap((i) => (Array.isArray(i?.rotationHashes) ? i.rotationHashes : [i?.rotationHashes]))
+          .filter(Boolean),
+        vflipHash: resolvedImages
+          .flatMap((i) => (Array.isArray(i?.vflipHash) ? i.vflipHash : i?.vflipHash ? [i.vflipHash] : []))
+          .filter(Boolean),
         hashesUnverified,
         priceRecommendation: {
           recommendedPrice: 0,
@@ -702,6 +728,7 @@ const createProduct = async (req, res, next) => {
       riskScore: risk.riskScore,
       riskLevel: identityResult?.outcome === 'flagged' ? 'high' : risk.riskLevel,
       factors: risk.factors,
+      riskFactorCategories: risk.riskFactorCategories,
       assessedAt: new Date(),
     };
     await product.save();
@@ -848,6 +875,8 @@ const updateProduct = async (req, res, next) => {
         const retained = currentKeys.has(key);
         let hash = null;
         let mirrorHash = null;
+        let rotationHashes = [];
+        let vflipHash = '';
 
         // Hashes are always computed server-side — client-submitted
         // hashes are never trusted.
@@ -855,12 +884,18 @@ const updateProduct = async (req, res, next) => {
           const buffer = await fetchImageBuffer(img.url);
           hash = await perceptualHashFromBuffer(buffer);
           mirrorHash = await mirrorPerceptualHashFromBuffer(buffer);
+          const variants = await orientationHashesFromBuffer(buffer);
+          rotationHashes = variants.rotationHashes;
+          vflipHash = variants.vflipHash;
         } catch (err) {
           // Retained images may fall back to their stored hash; brand-new
           // images must be verifiable server-side or the edit is rejected.
           const stored = product.images.find((i) => keyOf(i) === key);
           if (retained && stored && stored.perceptualHash) {
             hash = stored.perceptualHash;
+            mirrorHash = null;
+            rotationHashes = [];
+            vflipHash = '';
           } else {
             throw new AppError(
               'Could not verify one or more images. Images must be uploaded through ReSell.',
@@ -871,7 +906,7 @@ const updateProduct = async (req, res, next) => {
         }
 
         if (!retained && img.publicId) newPublicIds.push(img.publicId);
-        verified.push({ img, hash, mirrorHash, isNew: !retained });
+        verified.push({ img, hash, mirrorHash, rotationHashes, vflipHash, isNew: !retained });
       }
 
       // Duplicate detection for NEW images — identical rules to the
@@ -897,17 +932,18 @@ const updateProduct = async (req, res, next) => {
           'aiAnalysis.imageHashes': { $exists: true, $ne: [] },
           category: scopeCategory,
         })
-          .select('title aiAnalysis.imageHashes')
+          .select('title aiAnalysis.imageHashes aiAnalysis.rotationHashes aiAnalysis.vflipHash')
           .limit(500);
         candidates.push(...inScope);
       }
 
       for (const v of verified) {
         if (!v.isNew) continue;
-        for (const probe of [v.hash, v.mirrorHash]) {
+        const probeSet = [v.hash, v.mirrorHash, ...(v.rotationHashes || []), v.vflipHash].filter(Boolean);
+        for (const probe of probeSet) {
           if (!probe) continue;
           for (const candidate of candidates) {
-            for (const candidateHash of candidate.aiAnalysis?.imageHashes || []) {
+            for (const candidateHash of collectHashSet(candidate.aiAnalysis)) {
               const distance = hammingDistance(probe, candidateHash);
               // null = non-pHash entry (e.g. sha256 fallback) — skip, never compare.
               if (distance !== null && distance <= DUPLICATE_HASH_THRESHOLD) {
@@ -940,6 +976,12 @@ const updateProduct = async (req, res, next) => {
     product.aiAnalysis.imageHashes = verified.flatMap((v) =>
       [v.hash, v.mirrorHash].filter(Boolean)
     );
+    product.aiAnalysis.rotationHashes = verified
+      .flatMap((v) => v.rotationHashes || [])
+      .filter(Boolean);
+    product.aiAnalysis.vflipHash = verified
+      .flatMap((v) => (v.vflipHash ? [v.vflipHash] : []))
+      .filter(Boolean);
     product.aiAnalysis.lastAnalyzedAt = new Date();
 
     await product.save();
@@ -978,6 +1020,7 @@ const updateProduct = async (req, res, next) => {
       riskScore: risk.riskScore,
       riskLevel: risk.riskLevel,
       factors: risk.factors,
+      riskFactorCategories: risk.riskFactorCategories,
       assessedAt: new Date(),
     };
     await product.save();
