@@ -26,6 +26,17 @@ const {
 
 const clamp = (val, min, max) => Math.max(min, Math.min(max, val));
 
+// Candidate-pool caps: how many other listings each bounded scan compares
+// against. The duplicate-image (pHash) scan defaults to 500; the CNN/visual
+// similarity scan is sized by VISUAL_SCAN_CAP (productFingerprint.js
+// MAX_CANDIDATES). Raised caps cost memory/time; lowered caps risk coverage
+// gaps, which truncation logging below surfaces explicitly.
+const envNum = (name, fallback) => {
+  const parsed = Number(process.env[name]);
+  return Number.isFinite(parsed) ? parsed : fallback;
+};
+const DUPLICATE_SCAN_CAP = envNum('DUPLICATE_SCAN_CAP', 500);
+
 // Generalized risk categories exposed to non-admin surfaces. The detailed
 // factor strings expose internal thresholds (e.g. "<15% of original price");
 // buyers/sellers only see these coarse categories, while admins see the full
@@ -138,10 +149,23 @@ const detectRisk = async ({ product, hashes = [], aiAnalysis = {}, identitySigna
       candidateFilter.category = product.category;
     }
 
-    // Limit to recent 500 candidates to keep memory usage bounded
-    const candidates = await Product.find(candidateFilter)
-      .select('title aiAnalysis.imageHashes aiAnalysis.rotationHashes aiAnalysis.vflipHash')
-      .limit(500);
+    // Bound the candidate pool and surface truncation so coverage gaps at
+    // scale are visible instead of silent under-scanning.
+    // TODO(scalability): replace both bounded brute-force candidate scans
+    // (here and in assessVisualSimilarity below) with the ml-service HNSW
+    // ANN index (ml-service/pipeline/ann_index.py) once per-listing
+    // embeddings exist.
+    const [candidateTotal, candidates] = await Promise.all([
+      Product.countDocuments(candidateFilter),
+      Product.find(candidateFilter)
+        .select('title aiAnalysis.imageHashes aiAnalysis.rotationHashes aiAnalysis.vflipHash')
+        .limit(DUPLICATE_SCAN_CAP),
+    ]);
+    if (candidateTotal > DUPLICATE_SCAN_CAP) {
+      console.warn(
+        `[fraud] candidate pool truncated: ${candidateTotal} candidates, cap ${DUPLICATE_SCAN_CAP} — coverage incomplete for category ${product.category || 'all'}`
+      );
+    }
 
     for (const hash of probeHashes) {
       let duplicateFound = false;
@@ -337,10 +361,18 @@ const assessVisualSimilarity = async ({ productId, excludeProductId }) => {
     candidateFilter.category = product.category;
   }
 
-  const candidates = await Product.find(candidateFilter)
-    .select('title category images.cnnFeatures')
-    .limit(MAX_CANDIDATES)
-    .lean();
+  const [candidateTotal, candidates] = await Promise.all([
+    Product.countDocuments(candidateFilter),
+    Product.find(candidateFilter)
+      .select('title category images.cnnFeatures')
+      .limit(MAX_CANDIDATES)
+      .lean(),
+  ]);
+  if (candidateTotal > MAX_CANDIDATES) {
+    console.warn(
+      `[fraud] candidate pool truncated: ${candidateTotal} candidates, cap ${MAX_CANDIDATES} — coverage incomplete for category ${product.category || 'all'}`
+    );
+  }
 
   let best = null;
   for (const candidate of candidates) {

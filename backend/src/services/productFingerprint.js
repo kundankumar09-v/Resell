@@ -40,8 +40,8 @@ const MEDIUM_SIMILARITY_THRESHOLD = envNum('VISUAL_SIMILARITY_MEDIUM_THRESHOLD',
 const STRONG_SIMILARITY_THRESHOLD = envNum('VISUAL_SIMILARITY_STRONG_THRESHOLD', 0.97);
 
 // Maximum number of candidate listings to compare against, keeping the
-// crosswise comparison bounded.
-const MAX_CANDIDATES = 200;
+// crosswise comparison bounded. Configurable via VISUAL_SCAN_CAP.
+const MAX_CANDIDATES = envNum('VISUAL_SCAN_CAP', 200);
 
 /**
  * Cosine similarity between two numeric vectors.
