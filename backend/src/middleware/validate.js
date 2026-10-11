@@ -227,6 +227,19 @@ const markIdentityStatusValidation = [
   handleValidation,
 ];
 
+const createAppealValidation = [
+  param('id').isMongoId().withMessage('Invalid product ID'),
+  body('reason').notEmpty().withMessage('Appeal reason is required').isString().trim().isLength({ max: 2000 }).withMessage('Appeal reason too long'),
+  handleValidation,
+];
+
+const decideAppealValidation = [
+  param('id').isMongoId().withMessage('Invalid appeal ID'),
+  body('status').isIn(['approved', 'rejected']).withMessage('Invalid appeal status'),
+  body('moderatorNote').optional().isString().trim().isLength({ max: 2000 }).withMessage('Note too long'),
+  handleValidation,
+];
+
 module.exports = {
   handleValidation,
   registerValidation,
@@ -252,4 +265,6 @@ module.exports = {
   createCheckoutSessionValidation,
   verifyPossessionValidation,
   markIdentityStatusValidation,
+  createAppealValidation,
+  decideAppealValidation,
 };

@@ -15,7 +15,9 @@ const {
   updateUserValidation,
   moderateProductValidation,
   markIdentityStatusValidation,
+  decideAppealValidation,
 } = require('../middleware/validate');
+const { listAppeals, decideAppeal } = require('../controllers/appealController');
 
 router.use(protect, authorize('admin'));
 
@@ -31,5 +33,9 @@ router.put('/products/:id', moderateProductValidation, moderateProduct);
 
 // Product identity registry (stolen/flagged status) — admin/moderator only
 router.put('/identities/:id/status', markIdentityStatusValidation, markIdentityStatus);
+
+// Flag appeals — decided by admins; approved appeals clear the automated flag
+router.get('/appeals', listAppeals);
+router.put('/appeals/:id', decideAppealValidation, decideAppeal);
 
 module.exports = router;

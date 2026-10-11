@@ -108,3 +108,11 @@ export const orderService = {
   deliver: (id) => api.patch(`/orders/${id}/deliver`),
   cancel: (id) => api.post(`/orders/${id}/cancel`),
 };
+
+export const appealService = {
+  create: (productId, data) => api.post(`/products/${productId}/appeal`, data),
+};
+export const adminAppealService = {
+  list: (params) => api.get('/admin/appeals', { params }),
+  decide: (id, data) => api.put(`/admin/appeals/${id}`, data),
+};

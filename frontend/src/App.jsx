@@ -29,6 +29,7 @@ const Chat = lazy(() => import('./pages/Chat'));
 const AdminDashboard = lazy(() => import('./pages/AdminDashboard'));
 const AdminUsers = lazy(() => import('./pages/AdminUsers'));
 const AdminProducts = lazy(() => import('./pages/AdminProducts'));
+const AdminAppeals = lazy(() => import('./pages/AdminAppeals'));
 const AdminReports = lazy(() => import('./pages/AdminReports'));
 const AdminAnalytics = lazy(() => import('./pages/AdminAnalytics'));
 const AdminCategories = lazy(() => import('./pages/AdminCategories'));
@@ -75,6 +76,14 @@ function App() {
             element={
               <ProtectedRoute roles={['admin']}>
                 <AdminProducts />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin/appeals"
+            element={
+              <ProtectedRoute roles={['admin']}>
+                <AdminAppeals />
               </ProtectedRoute>
             }
           />

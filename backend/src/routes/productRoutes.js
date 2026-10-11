@@ -21,11 +21,13 @@ const {
 const { protect, optionalAuth } = require('../middleware/auth');
 const upload = require('../middleware/upload');
 const { productCreateLimiter } = require('../middleware/rateLimiters');
+const { createAppeal } = require('../controllers/appealController');
 const {
   createProductValidation,
   updateProductValidation,
   productQueryValidation,
   verifyPossessionValidation,
+  createAppealValidation,
 } = require('../middleware/validate');
 
 router.get('/', optionalAuth, productQueryValidation, getProducts);
@@ -36,6 +38,7 @@ router.get('/:id', optionalAuth, getProduct);
 router.get('/:id/similar', optionalAuth, getSimilarProducts);
 router.get('/:id/reviews', optionalAuth, getProductReviews);
 router.get('/:id/identity', optionalAuth, getProductIdentityStatus);
+router.post('/:id/appeal', protect, createAppealValidation, createAppeal);
 router.post('/:id/identity/possession-challenge', protect, requestPossession);
 router.post(
   '/:id/identity/verify-possession',

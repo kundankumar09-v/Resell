@@ -10,9 +10,10 @@ import {
   CheckCircle,
   XCircle,
   AlertTriangle,
+  X,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { productService } from '../services/services';
+import { productService, appealService } from '../services/services';
 import PageTransition from '../components/layout/PageTransition';
 import Loader from '../components/ui/Loader';
 import EmptyState from '../components/ui/EmptyState';
@@ -26,6 +27,7 @@ export default function MyProducts() {
   const formatPrice = useFormatPrice('USD');
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [appealTarget, setAppealTarget] = useState(null);
 
   useEffect(() => {
     productService
@@ -33,6 +35,16 @@ export default function MyProducts() {
       .then((r) => setItems(r.data.items))
       .finally(() => setLoading(false));
   }, []);
+
+  const submitAppeal = async (productId, reason) => {
+    try {
+      await appealService.create(productId, { reason });
+      toast.success('Appeal submitted for review');
+      setAppealTarget(null);
+    } catch (err) {
+      toast.error(err?.response?.data?.error || 'Failed to submit appeal');
+    }
+  };
 
   const handleDelete = async (id) => {
     if (!confirm('Delete this listing? This action cannot be undone.')) return;
@@ -157,7 +169,14 @@ export default function MyProducts() {
                           </span>
                         )}
                         {p.isFlagged && (
-                          <span className="badge bg-red-100 text-red-700">Flagged</span>
+                          <button
+                            type="button"
+                            onClick={() => setAppealTarget(p)}
+                            className="badge bg-red-100 text-red-700 hover:bg-red-200 font-medium"
+                            title="Dispute this automated flag"
+                          >
+                            Flagged — Dispute
+                          </button>
                         )}
                       </div>
                     </div>
@@ -232,6 +251,65 @@ export default function MyProducts() {
           )}
         </div>
       </div>
+      {appealTarget && (
+        <AppealModal
+          product={appealTarget}
+          onClose={() => setAppealTarget(null)}
+          onSubmit={(reason) => submitAppeal(appealTarget._id, reason)}
+        />
+      )}
     </PageTransition>
+  );
+}
+
+function AppealModal({ product, onClose, onSubmit }) {
+  const [reason, setReason] = useState('');
+  const [sending, setSending] = useState(false);
+
+  return (
+    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 grid place-items-center p-4">
+      <motion.div
+        initial={{ opacity: 0, scale: 0.9, y: 20 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        className="card p-6 w-full max-w-md"
+      >
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="font-display font-bold text-xl">Dispute Automatic Flag</h3>
+          <button onClick={onClose} className="p-1 rounded-lg hover:bg-slate-100">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+        <p className="text-sm text-slate-500 mb-3">
+          Explain why this listing should not be flagged. An admin will review
+          your dispute.
+        </p>
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            setSending(true);
+            onSubmit(reason);
+          }}
+          className="space-y-3"
+        >
+          <textarea
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            required
+            rows={4}
+            maxLength={2000}
+            placeholder="e.g. This is my original item — the photo matching is coincidental because..."
+            className="input"
+          />
+          <div className="flex justify-end gap-2">
+            <button type="button" onClick={onClose} className="btn">
+              Cancel
+            </button>
+            <button type="submit" disabled={sending || !reason.trim()} className="btn-primary">
+              {sending ? 'Submitting…' : 'Submit Dispute'}
+            </button>
+          </div>
+        </form>
+      </motion.div>
+    </div>
   );
 }
