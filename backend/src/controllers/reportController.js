@@ -4,6 +4,7 @@ const User = require('../models/User');
 const AppError = require('../utils/AppError');
 const audit = require('../middleware/audit');
 const { notify } = require('../services/notificationService');
+const { sendOutcomeFeedback } = require('../services/mlClient');
 
 const populateTarget = async (report) => {
   if (report.targetType === 'product') {
@@ -112,6 +113,21 @@ const updateReport = async (req, res, next) => {
     report.reviewedBy = req.user._id;
     report.reviewedAt = new Date();
     await report.save();
+
+    // Human-confirmed fraud outcome → feedback for the ML pipeline. A
+    // moderator resolving a product report with a recorded action is treated
+    // as a ground-truth-positive label. Dismissed stays ambiguous (the
+    // reporter may simply be mistaken), so we deliberately do not feed it
+    // back as a negative.
+    if (report.targetType === 'product' && status === 'resolved' && report.action) {
+      await sendOutcomeFeedback({
+        recordId: report.target,
+        outcome: {
+          decided: 'confirmed_fraud',
+          reportAction: report.action,
+        },
+      });
+    }
 
     // Notify the reporter their report was reviewed
     await notify({

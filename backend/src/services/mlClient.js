@@ -173,6 +173,35 @@ function blendWithMl(local, ml, weight = DEFAULT_ML_BLEND_WEIGHT) {
   };
 }
 
+/**
+ * Attach a later human outcome (appeal decided, report resolved) to a logged
+ * prediction so the ML pipeline can learn from true vs. false positives.
+ *
+ * The ml-service keys fraud predictions by the listing `_id` and only applies
+ * the outcome to a record that still has `outcome: null` — so this is always
+ * a no-op when no matching prediction was logged.
+ *
+ * Degrades gracefully: ML being unavailable must never break the request
+ * that produced the human decision, so failures are swallowed and reported
+ * via the return value.
+ *
+ * @param {Object} params
+ * @param {string} params.recordId  Listing/product `_id` the prediction was keyed by
+ * @param {Object} params.outcome   e.g. { decided: 'confirmed_fraud' } or
+ *                                  { decided: 'false_positive', disputedFactors: [...] }
+ * @returns {Promise<boolean>} true when the ml-service reported the outcome was attached
+ */
+async function sendOutcomeFeedback({ recordId, outcome }) {
+  if (!recordId || !outcome) return false;
+  try {
+    const res = await client.post('/feedback', { recordId, outcome });
+    return Boolean(res.data?.success);
+  } catch (err) {
+    console.warn(`[MLClient] Outcome feedback not delivered: ${err.message}`);
+    return false;
+  }
+}
+
 module.exports = {
   checkHealth,
   getEmbedding,
@@ -180,6 +209,7 @@ module.exports = {
   checkFraud,
   estimatePrice,
   blendWithMl,
+  sendOutcomeFeedback,
   DEFAULT_ML_BLEND_WEIGHT,
   ML_SERVICE_URL,
 };

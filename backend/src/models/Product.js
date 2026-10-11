@@ -186,6 +186,10 @@ const productSchema = new mongoose.Schema(
         // what non-admin surfaces see — the exact factor strings (which expose
         // internal thresholds) stay admin-only.
         riskFactorCategories: [{ type: String }],
+        // Categories a human moderator explicitly overruled (appeal approved).
+        // Fed back to the ML pipeline as false-positive training signal and
+        // shown to sellers as the disputed aspects of their listing.
+        disputedFactors: [{ type: String }],
         assessedAt: { type: Date, default: Date.now },
       },
       lastAnalyzedAt: { type: Date, default: Date.now },

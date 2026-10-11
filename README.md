@@ -805,9 +805,15 @@ The ML service supports three operating modes via the `ML_PIPELINE_V2` environme
 | Production v2 | `1` | v2 LightGBM results served |
 
 Shadow mode enables safe model validation:
-- Both pipelines log outputs with a shared `recordId`
+- Both pipelines log outputs with a shared `recordId` (the listing `_id`)
 - Admins attach outcomes (fraud confirmed / false positive) via `POST /feedback`
 - Drift and accuracy metrics available at `GET /pipeline-stats`
+
+**Backend outcome feedback loop** (`backend/src/services/mlClient.js`):
+- `sendOutcomeFeedback({ recordId, outcome })` posts to `POST /feedback` and never throws — ML being down cannot block the request that produced the human decision.
+- **Appeal approved** → `{ decided: 'false_positive', factorCategories }`; the overruled categories are also appended to `product.aiAnalysis.riskAssessment.disputedFactors` (`backend/src/controllers/appealController.js`).
+- **Product report resolved with an action** → `{ decided: 'confirmed_fraud', reportAction }` (`backend/src/controllers/reportController.js`). Dismissed reports are deliberately not fed back (reporter may simply be mistaken).
+- ml-service only attaches the outcome to a prediction record whose `outcome` is still `null`; no matching record is a silent no-op.
 
 ### 8.5 ANN Index (HNSW)
 

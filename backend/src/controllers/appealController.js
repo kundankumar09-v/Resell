@@ -2,6 +2,7 @@ const Product = require('../models/Product');
 const Appeal = require('../models/Appeal');
 const AppError = require('../utils/AppError');
 const { notify } = require('../services/notificationService');
+const { sendOutcomeFeedback } = require('../services/mlClient');
 
 /**
  * Seller appeals an automated fraud/quality flag on one of their listings.
@@ -95,6 +96,29 @@ const decideAppeal = async (req, res, next) => {
         isFlagged: false,
         flagReason: '',
       });
+
+      // Record the disputed categories and send a false-positive outcome to
+      // the ML pipeline. Best-effort: unknown/disputed categories are handled
+      // by the schema default and the feedback helper never throws.
+      const product = await Product.findById(appeal.product._id);
+      if (product?.aiAnalysis) {
+        const assessment = product.aiAnalysis.riskAssessment;
+        const categories = assessment?.riskFactorCategories || [];
+        const existing = new Set(assessment?.disputedFactors || []);
+        const disputed = categories.filter((cat) => !existing.has(cat));
+        if (disputed.length > 0) {
+          assessment.disputedFactors = [...existing, ...disputed];
+          await product.save();
+        }
+        await sendOutcomeFeedback({
+          recordId: appeal.product._id,
+          outcome: {
+            decided: 'false_positive',
+            factorCategories: categories,
+            disputedFactors: disputed,
+          },
+        });
+      }
     }
 
     await notify({
