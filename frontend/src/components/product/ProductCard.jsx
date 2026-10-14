@@ -59,19 +59,21 @@ export default function ProductCard({ product, index = 0 }) {
       <Link to={`/product/${product._id}`} className="block">
         <TiltCard maxTilt={8} className="card overflow-hidden group">
           <div className="relative aspect-square overflow-hidden bg-slate-100">
-            <motion.img
-              src={mainImage}
-              alt={product.title}
-              loading="lazy"
-              className="w-full h-full object-cover"
-              onError={(e) => handleImageError(e, PRODUCT_FALLBACK_IMAGE)}
-              initial={{ scale: 1.05 }}
-              animate={{ scale: 1 }}
-              transition={{ duration: 0.8, ease: 'easeOut' }}
-              style={{
-                transformOrigin: 'center center',
-              }}
-            />
+            <div className="h-full w-full transition-transform duration-[400ms] ease-out-soft group-hover:scale-105">
+              <motion.img
+                src={mainImage}
+                alt={product.title}
+                loading="lazy"
+                className="w-full h-full object-cover"
+                onError={(e) => handleImageError(e, PRODUCT_FALLBACK_IMAGE)}
+                initial={{ scale: 1.05 }}
+                animate={{ scale: 1 }}
+                transition={{ duration: 0.8, ease: 'easeOut' }}
+                style={{
+                  transformOrigin: 'center center',
+                }}
+              />
+            </div>
             <motion.div
               className="absolute inset-0 bg-gradient-to-t from-black/40 via-transparent to-transparent"
               initial={{ opacity: 0 }}

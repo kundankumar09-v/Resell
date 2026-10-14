@@ -285,7 +285,7 @@ export default function Navbar() {
         className={cn(
           'container-page rounded-2xl transition-all duration-500',
           scrolled
-            ? 'border border-white/60 bg-white/75 shadow-[0_12px_40px_-12px_rgba(15,23,42,0.18)] backdrop-blur-2xl'
+            ? 'navbar-shell-scrolled border border-white/60 bg-white/75 shadow-soft-md backdrop-blur-2xl'
             : 'border border-transparent bg-transparent'
         )}
       >
@@ -315,18 +315,18 @@ export default function Navbar() {
                   key={link.to}
                   to={link.to}
                   className={cn(
-                    'group relative rounded-full px-4 py-2 text-sm font-medium transition-all duration-200',
-                    isActive ? 'text-slate-900' : 'text-slate-500 hover:text-slate-900'
+                    'group relative rounded-full px-4 py-2 text-sm font-medium transition-colors duration-250',
+                    isActive ? 'text-brand-700 dark:text-white' : 'text-slate-500 hover:text-slate-900'
                   )}
                 >
+                  <span className="relative z-10">{link.label}</span>
                   {isActive && (
                     <motion.span
-                      layoutId="nav-pill"
-                      className="absolute inset-0 rounded-full bg-white shadow-sm ring-1 ring-slate-200/80"
-                      transition={{ type: 'spring', stiffness: 400, damping: 32 }}
+                      layoutId="nav-underline"
+                      className="absolute inset-x-3 bottom-0.5 z-0 h-[2px] rounded-full bg-gradient-to-r from-brand-600 via-violet-500 to-accent-500"
+                      transition={{ type: 'spring', stiffness: 420, damping: 34 }}
                     />
                   )}
-                  <span className="relative z-10">{link.label}</span>
                 </Link>
               );
             })}
@@ -468,7 +468,7 @@ export default function Navbar() {
                         role="dialog"
                         aria-modal="true"
                         aria-label="Notifications"
-                        className="absolute right-0 mt-3 w-80 max-w-[92vw] overflow-hidden rounded-2xl border border-slate-100 bg-white/95 shadow-2xl backdrop-blur-2xl z-50 max-sm:fixed max-sm:inset-x-3 max-sm:top-20 max-sm:right-auto max-sm:left-auto"
+                        className="absolute right-0 mt-3 w-80 max-w-[92vw] origin-top-right overflow-hidden rounded-2xl border border-slate-200/70 bg-white/95 shadow-soft-lg backdrop-blur-2xl z-50 dark:border-slate-700/60 max-sm:fixed max-sm:inset-x-3 max-sm:top-20 max-sm:right-auto max-sm:left-auto"
                       >
                         <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
                           <p className="text-sm font-semibold text-slate-900">Notifications</p>
@@ -551,7 +551,7 @@ export default function Navbar() {
                         animate={{ opacity: 1, y: 0, scale: 1 }}
                         exit={{ opacity: 0, y: -8, scale: 0.96 }}
                         transition={{ duration: 0.18 }}
-                        className="absolute right-0 mt-3 w-56 overflow-hidden rounded-2xl border border-slate-100 bg-white/95 shadow-2xl backdrop-blur-2xl"
+                        className="absolute right-0 mt-3 w-56 origin-top-right overflow-hidden rounded-2xl border border-slate-200/70 bg-white/95 shadow-soft-lg backdrop-blur-2xl dark:border-slate-700/60"
                       >
                         <div className="border-b border-slate-100 p-4">
                           <p className="text-sm font-semibold text-slate-900">{user.name}</p>
