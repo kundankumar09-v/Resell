@@ -16,6 +16,7 @@ import {
   Image,
   DollarSign,
   Hash,
+  Bot,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { productService, categoryService } from '../services/services';
@@ -87,6 +88,13 @@ export default function SellProduct() {
   const [priceSuggestion, setPriceSuggestion] = useState(null);
   const [categoryAutoFilled, setCategoryAutoFilled] = useState(false);
   const [submitAttempted, setSubmitAttempted] = useState(false);
+  // Post-submit: the created product's ID and worker suggestion polling state
+  const [createdProductId, setCreatedProductId] = useState(null);
+  const [workerSuggestion, setWorkerSuggestion] = useState(null); // { category, confidence, categoryId } | null
+  const [suggestionDismissed, setSuggestionDismissed] = useState(false);
+  const [suggestionPolling, setSuggestionPolling] = useState(false);
+  const pollTimerRef = useRef(null);
+  const pollCountRef = useRef(0);
 
   const currencyMeta = SUPPORTED_CURRENCIES.find((c) => c.code === selectedCurrency) || SUPPORTED_CURRENCIES.find((c) => c.code === 'INR');
   const selectedCategory = categories.find((c) => c._id === form.category);
@@ -116,6 +124,55 @@ export default function SellProduct() {
 
   useEffect(() => {
     categoryService.list().then((r) => setCategories(r.data.categories)).catch(() => {});
+  }, []);
+
+  // ── Worker suggestion polling ────────────────────────────────────────────────
+  // After listing creation, poll GET /products/:id every 2s for up to 30s waiting
+  // for the imageProcessor worker to write aiAnalysis.classification.predictedCategory.
+  const startPolling = useCallback((productId, currentCategoryId) => {
+    setSuggestionPolling(true);
+    pollCountRef.current = 0;
+    const MAX_POLLS = 15; // 2s * 15 = 30s
+
+    const poll = async () => {
+      try {
+        const { data } = await productService.get(productId);
+        const predicted = data.product?.aiAnalysis?.classification?.predictedCategory;
+        const confidence = data.product?.aiAnalysis?.classification?.confidence;
+
+        if (predicted && predicted !== '') {
+          // Worker has finished — find matching category
+          const matched = categories.find(
+            (c) => c.name.toLowerCase() === predicted.toLowerCase()
+          );
+          setSuggestionPolling(false);
+          setWorkerSuggestion({
+            category: predicted,
+            confidence: confidence || 0,
+            categoryId: matched?._id || null,
+          });
+          return;
+        }
+      } catch {
+        // Polling errors are silent — network hiccup, retry
+      }
+
+      pollCountRef.current += 1;
+      if (pollCountRef.current < MAX_POLLS) {
+        pollTimerRef.current = setTimeout(poll, 2000);
+      } else {
+        // Timeout — worker didn't respond (likely Redis off)
+        setSuggestionPolling(false);
+        setWorkerSuggestion({ category: null, confidence: 0, categoryId: null });
+      }
+    };
+
+    pollTimerRef.current = setTimeout(poll, 2000);
+  }, [categories]);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => { if (pollTimerRef.current) clearTimeout(pollTimerRef.current); };
   }, []);
 
   // Auto-fill category from image classification prediction
@@ -381,7 +438,10 @@ export default function SellProduct() {
         }
       }
       toast.success('Listing published!');
-      navigate(`/product/${data.product._id}`);
+      // Start polling for worker AI category suggestion instead of navigating immediately
+      const pid = data.product._id;
+      setCreatedProductId(pid);
+      startPolling(pid, form.category);
     } catch (err) {
       const status = err.response?.status;
       const msg = err.response?.data?.message;
@@ -397,6 +457,145 @@ export default function SellProduct() {
       setLoading(false);
     }
   };
+
+  // ── Apply AI suggestion ──────────────────────────────────────────────────────
+  const applyWorkerSuggestion = async () => {
+    if (!createdProductId || !workerSuggestion?.categoryId) return;
+    try {
+      await productService.update(createdProductId, { category: workerSuggestion.categoryId });
+      toast.success(`Category updated to ${workerSuggestion.category}`);
+    } catch {
+      toast.error('Could not apply suggestion — you can edit it from the product page.');
+    } finally {
+      navigate(`/product/${createdProductId}`);
+    }
+  };
+
+  // ── Post-submit state: show AI suggestion polling card ───────────────────────
+  if (createdProductId) {
+    const selectedCat = categories.find((c) => c._id === form.category);
+    const suggestion = workerSuggestion?.category;
+    const confidence = workerSuggestion?.confidence || 0;
+    const isSameAsSelected =
+      suggestion &&
+      selectedCat &&
+      suggestion.toLowerCase() === selectedCat.name.toLowerCase();
+
+    return (
+      <PageTransition>
+        <div className="relative min-h-screen">
+          <div className="container-page py-8 md:py-12 max-w-4xl relative z-10">
+            <ScrollReveal direction="up">
+              <div className="mb-8 text-center">
+                <motion.div
+                  initial={{ scale: 0 }}
+                  animate={{ scale: 1 }}
+                  className="w-20 h-20 mx-auto rounded-full bg-gradient-to-br from-emerald-500 to-teal-500 grid place-items-center mb-4"
+                >
+                  <Check className="w-10 h-10 text-white" />
+                </motion.div>
+                <h1 className="font-display font-bold text-3xl mb-2">Listing Published! 🎉</h1>
+                <p className="text-slate-500">Your item is live on the marketplace.</p>
+              </div>
+            </ScrollReveal>
+
+            {/* AI Suggestion Banner */}
+            <AnimatePresence mode="wait">
+              {!suggestionDismissed && (
+                <motion.div
+                  key="suggestion-card"
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -10 }}
+                  className="card p-6 mb-6 bg-gradient-to-br from-brand-50 to-accent-50 border-brand-100"
+                >
+                  <div className="flex items-start gap-4">
+                    <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-brand-600 to-accent-500 grid place-items-center flex-shrink-0">
+                      <Bot className="w-6 h-6 text-white" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      {suggestionPolling ? (
+                        <>
+                          <div className="flex items-center gap-2 mb-1">
+                            <Loader2 className="w-4 h-4 animate-spin text-brand-600" />
+                            <span className="font-semibold text-sm text-brand-700">AI is analyzing your photos…</span>
+                          </div>
+                          <p className="text-xs text-slate-500">The category suggestion will appear here in a few seconds. Worker is processing images.</p>
+                        </>
+                      ) : suggestion ? (
+                        <>
+                          <p className="font-semibold text-sm text-brand-700 mb-0.5">
+                            {isSameAsSelected
+                              ? `🤖 AI agrees: ${suggestion}`
+                              : selectedCat
+                              ? `🤖 AI thinks this is ${suggestion} — you picked ${selectedCat.name}`
+                              : `🤖 AI suggests: ${suggestion}`}
+                            {confidence > 0 && (
+                              <span className="ml-2 text-xs font-normal text-slate-400">
+                                ({Math.round(confidence * 100)}% confident)
+                              </span>
+                            )}
+                          </p>
+                          <p className="text-xs text-slate-500 mb-4">
+                            {isSameAsSelected
+                              ? 'Your selected category matches the AI prediction — great choice!'
+                              : 'You can apply the AI suggestion or keep your original selection.'}
+                          </p>
+                          <div className="flex flex-wrap gap-2">
+                            {!isSameAsSelected && workerSuggestion?.categoryId && (
+                              <button
+                                id="ai-suggestion-apply"
+                                onClick={applyWorkerSuggestion}
+                                className="px-4 py-2 rounded-xl bg-brand-600 hover:bg-brand-700 text-white text-sm font-semibold shadow-sm transition-all"
+                              >
+                                Apply — change to {suggestion}
+                              </button>
+                            )}
+                            <button
+                              id="ai-suggestion-dismiss"
+                              onClick={() => {
+                                setSuggestionDismissed(true);
+                                navigate(`/product/${createdProductId}`);
+                              }}
+                              className="px-4 py-2 rounded-xl bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 text-sm font-semibold transition-all"
+                            >
+                              {isSameAsSelected ? 'View listing →' : 'Keep my selection'}
+                            </button>
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <p className="font-semibold text-sm text-slate-700 mb-0.5">AI analysis not available</p>
+                          <p className="text-xs text-slate-500 mb-4">
+                            The AI worker did not return a category suggestion (Redis may be off, or the worker is not running).
+                            Your listing is live and the category you selected has been saved.
+                          </p>
+                          <button
+                            id="ai-suggestion-continue"
+                            onClick={() => navigate(`/product/${createdProductId}`)}
+                            className="px-4 py-2 rounded-xl bg-brand-600 hover:bg-brand-700 text-white text-sm font-semibold shadow-sm transition-all"
+                          >
+                            View listing →
+                          </button>
+                        </>
+                      )}
+                    </div>
+                    <button
+                      onClick={() => { setSuggestionDismissed(true); navigate(`/product/${createdProductId}`); }}
+                      className="text-slate-400 hover:text-slate-600 transition flex-shrink-0"
+                      aria-label="Dismiss suggestion"
+                    >
+                      <X className="w-5 h-5" />
+                    </button>
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+        </div>
+      </PageTransition>
+    );
+  }
 
   return (
     <PageTransition>
