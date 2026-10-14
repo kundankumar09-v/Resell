@@ -1,4 +1,4 @@
-/* eslint-disable no-console */
+﻿/* eslint-disable no-console */
 const mongoose = require('mongoose');
 const dotenv = require('dotenv');
 const path = require('path');
@@ -55,7 +55,6 @@ const PRODUCTS = [
     condition: 'like-new',
     yearsUsed: 1,
     image: 'iphone-13-midnight.jpg',
-    colors: ['#3b82f6', '#1e3a8a'],
     description:
       'Great condition iPhone 13, always used with a case and tempered-glass screen protector. Battery health 89%, includes the original Lightning cable and box. Face ID and all cameras fully working — no scratches, no dents. Selling because I upgraded to the 15.',
     specs: [
@@ -75,8 +74,8 @@ const PRODUCTS = [
     model: 'iPhone 13 Pro Max',
     condition: 'good',
     yearsUsed: 2,
+    // Same image file as first listing — CASE 1: exact duplicate (pHash hit expected)
     image: 'iphone-13-midnight.jpg',
-    colors: ['#6366f1', '#0f172a'],
     description:
       'iPhone 13 Pro Max with 256GB storage in graphite. ProMotion 120Hz display, triple-lens camera system. Battery health 85%. Includes the original box. Ships fast.',
     specs: [
@@ -96,7 +95,6 @@ const PRODUCTS = [
     condition: 'like-new',
     yearsUsed: 1,
     image: 'macbook-pro-14.jpg',
-    colors: ['#64748b', '#0f172a'],
     description:
       'MacBook Pro 14-inch with the M1 Pro chip, 16GB unified memory and a 1TB SSD. 96% design battery capacity. Purchased last year for freelance video work, barely travelled. Comes with the original 96W MagSafe charger. Unboxed this week for photos only.',
     specs: [
@@ -117,7 +115,6 @@ const PRODUCTS = [
     condition: 'like-new',
     yearsUsed: 1,
     image: 'sony-wh1000xm4.jpg',
-    colors: ['#0f766e', '#134e4a'],
     description:
       'Industry-leading noise-cancelling headphones. 30-hour battery life, multipoint pairing, and superb call quality. Used indoors only, comes with the carry case, both cables and the airline adapter. Genuine reason for sale — I was given AirPods Max as a gift.',
     specs: [
@@ -137,7 +134,6 @@ const PRODUCTS = [
     condition: 'good',
     yearsUsed: 2,
     image: 'nike-af1-white.jpg',
-    colors: ['#f8fafc', '#94a3b8'],
     description:
       'Classic white Air Force 1s, US size 10. Worn for a season, still plenty of life left. Cleaned and wiped before listing. Minor creasing on the toe box as expected. Original box included.',
     specs: [
@@ -146,7 +142,7 @@ const PRODUCTS = [
     ],
   },
   {
-    title: 'Women’s Leather Jacket — Camel, Size M',
+    title: "Women's Leather Jacket — Camel, Size M",
     category: 'Fashion',
     seller: 'meera',
     price: 120,
@@ -155,7 +151,6 @@ const PRODUCTS = [
     condition: 'good',
     yearsUsed: 3,
     image: 'leather-jacket-camel.jpg',
-    colors: ['#b45309', '#78350f'],
     description:
       'Genuine leather jacket in a warm camel tone, size medium. Broke in beautifully — soft and comfortable. Zips all work, lining is intact. A couple of light surface scuffs give it character.',
     specs: [
@@ -174,7 +169,6 @@ const PRODUCTS = [
     condition: 'good',
     yearsUsed: 2,
     image: 'desk-lamp-led.jpg',
-    colors: ['#0ea5e9', '#082f49'],
     description:
       'Reading lamp with 21 brightness levels and a USB-A port for charging your phone. Great for late-night work. Priced to move.',
     specs: [
@@ -193,7 +187,6 @@ const PRODUCTS = [
     condition: 'good',
     yearsUsed: 2,
     image: 'office-chair-mesh.jpg',
-    colors: ['#475569', '#1e293b'],
     description:
       'High-back mesh office chair with adjustable lumbar support, tilt tension control, and armrests. In very good mechanical shape — all adjustments work smoothly. Selling due to a move to a standing desk.',
     specs: [
@@ -212,7 +205,6 @@ const PRODUCTS = [
     condition: 'like-new',
     yearsUsed: 1,
     image: 'dumbbells-pair.jpg',
-    colors: ['#334155', '#b91c1c'],
     description:
       'Pair of adjustable dumbbells spanning 5 to 24 kg each — replaces 15 sets of fixed dumbbells. Used for six months, stored on the rack, everything clicks and locks perfectly. Heavy, so local pickup preferred.',
     specs: [
@@ -231,7 +223,6 @@ const PRODUCTS = [
     condition: 'good',
     yearsUsed: 3,
     image: 'office-desk-oak.jpg',
-    colors: ['#d6b470', '#92400e'],
     description:
       '120cm oak-look desk with two drawers and a cable-management tray. Sturdy, no wobble. Some faint ring marks from mugs — cosmetic only. Buyer collects from our apartment building lobby.',
     specs: [
@@ -249,7 +240,6 @@ const PRODUCTS = [
     condition: 'good',
     yearsUsed: 5,
     image: 'harry-potter-books.jpg',
-    colors: ['#f59e0b', '#451a03'],
     description:
       'Complete seven-book run of the Harry Potter series in paperback. Kept on a shelf, spines unbroken, no underlining or dog-ears. Selling as a set — not splitting.',
     specs: [
@@ -268,7 +258,6 @@ const PRODUCTS = [
     condition: 'good',
     yearsUsed: 1,
     image: 'apple-watch-se.jpg',
-    colors: ['#cbd5e1', '#475569'],
     description:
       'Apple Watch SE 44mm GPS in silver with the sport band. Battery still lasts a full day. Screen is clean, no cracks. Includes the magnetic charging cable. Great first smartwatch.',
     specs: [
@@ -278,37 +267,133 @@ const PRODUCTS = [
   },
 ];
 
+// ── DEMO DUPLICATE DETECTION LISTINGS ─────────────────────────────────────────
+// These are 6 extra listings that cover all 4 fraud-detection cases.
+// See Task 2 — each description includes one line explaining what it demonstrates.
+// Case 1 (exact pHash duplicate) uses products[0] & products[1] above (iphone-13-midnight.jpg shared).
+// Cases 2, 3, 4 are added below.
+
+const DEMO_PRODUCTS = [
+  // CASE 2A — re-photographed variant: 5% crop + brightness 1.1 + JPEG q70 applied by Sharp at seed time.
+  // Expected: CNN/CLIP supporting signal only. NOT high risk — demonstrates "visual similarity alone never proves fraud."
+  {
+    title: '[DEMO] Samsung Galaxy S22 Ultra — Re-photo Variant',
+    category: 'Mobile Phones',
+    seller: 'arjun',
+    price: 480,
+    originalPrice: 799,
+    brand: 'Samsung',
+    model: 'Galaxy S22 Ultra',
+    condition: 'good',
+    yearsUsed: 1,
+    image: 'iphone-13-midnight.jpg',
+    imageTransform: 'rephotograph', // 5% crop + brightness 1.1 + q70
+    description:
+      '[DEMO CASE 2] Same product category but photographed differently — demonstrates that visual similarity (CNN/CLIP) alone never flags as high risk; only pHash exact match triggers the +35 duplicate penalty.',
+    specs: [{ key: 'DEMO', value: 'Case 2 — re-photographed variant' }],
+  },
+  // CASE 2B — second listing for Case 2 demo (different seller of same product category)
+  {
+    title: '[DEMO] iPhone 13 — Different Angle Shot',
+    category: 'Mobile Phones',
+    seller: 'meera',
+    price: 490,
+    originalPrice: 799,
+    brand: 'Apple',
+    model: 'iPhone 13',
+    condition: 'good',
+    yearsUsed: 1,
+    image: 'iphone-demo-case2.jpg',
+    description:
+      '[DEMO CASE 2] Distinct photo of same product category from different seller — CNN/CLIP may show visual similarity; expected riskLevel: low to medium (supporting signal only, no pHash hit).',
+    specs: [{ key: 'DEMO', value: 'Case 2 — separate angle listing' }],
+  },
+  // CASE 3A — legitimate same-category sneakers (Adidas — distinct photo)
+  {
+    title: '[DEMO] Adidas Ultraboost 22 — Black, US 9',
+    category: 'Fashion',
+    seller: 'priya',
+    price: 80,
+    originalPrice: 180,
+    brand: 'Adidas',
+    model: 'Ultraboost 22',
+    condition: 'good',
+    yearsUsed: 1,
+    image: 'sneakers-demo-case3a.jpg',
+    description:
+      '[DEMO CASE 3] Distinct Adidas sneakers — same category as Nike AF1 but entirely different brand/photo. Expect ZERO duplicate signals: proves legitimate same-category sellers are not penalised.',
+    specs: [{ key: 'DEMO', value: 'Case 3 — legitimate same-category seller A' }],
+  },
+  // CASE 3B — second legitimate same-category sneaker listing
+  {
+    title: '[DEMO] New Balance 550 — White/Green, US 10',
+    category: 'Fashion',
+    seller: 'arjun',
+    price: 90,
+    originalPrice: 150,
+    brand: 'New Balance',
+    model: '550',
+    condition: 'like-new',
+    yearsUsed: 0,
+    image: 'sneakers-demo-case3b.jpg',
+    description:
+      '[DEMO CASE 3] Distinct New Balance sneakers from different seller — same category, different photo, different brand. Expect zero duplicate signals.',
+    specs: [{ key: 'DEMO', value: 'Case 3 — legitimate same-category seller B' }],
+  },
+  // CASE 4 — mirror-flipped version of Case 1 image. Expect mirror-hash detection.
+  {
+    title: '[DEMO] iPhone 13 — Mirrored Listing',
+    category: 'Mobile Phones',
+    seller: 'meera',
+    price: 510,
+    originalPrice: 799,
+    brand: 'Apple',
+    model: 'iPhone 13',
+    condition: 'good',
+    yearsUsed: 1,
+    image: 'iphone-13-midnight.jpg',
+    imageTransform: 'mirror', // Sharp flop() applied at seed time
+    description:
+      '[DEMO CASE 4] Mirror-flipped (horizontally) version of the CASE 1 iPhone image — demonstrates that mirrorPerceptualHash detects the flop() evasion: the stored mirrorHash of Case 1 matches the pHash of this listing.',
+    specs: [{ key: 'DEMO', value: 'Case 4 — mirror-hash detection' }],
+  },
+];
+
 const slugify = (name) =>
   name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
 
-const escapeXml = (str) =>
-  str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+/**
+ * Load a real image from IMAGES_DIR, optionally apply a transform, resize to
+ * max 1200px and return the JPEG buffer.
+ */
+const loadImage = async (filename, transform) => {
+  const filePath = path.join(IMAGES_DIR, filename);
+  if (!fs.existsSync(filePath)) {
+    throw new Error(`Seed image not found: ${filePath}. Run: node backend/scripts/download-seed-images.js`);
+  }
+  let pipeline = sharp(fs.readFileSync(filePath));
 
-const makePlaceholderImage = async ({ filename, title, colors }) => {
-  fs.mkdirSync(IMAGES_DIR, { recursive: true });
-  const [c0, c1] = colors;
-  const svg = `
-    <svg xmlns="http://www.w3.org/2000/svg" width="640" height="480">
-      <defs>
-        <linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">
-          <stop offset="0%" stop-color="${c0}"/>
-          <stop offset="100%" stop-color="${c1}"/>
-        </linearGradient>
-      </defs>
-      <rect width="640" height="480" fill="url(#g)"/>
-      <circle cx="560" cy="80" r="90" fill="rgba(255,255,255,0.12)"/>
-      <circle cx="60" cy="420" r="70" fill="rgba(255,255,255,0.10)"/>
-      <text x="320" y="215" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif"
-            font-size="40" font-weight="700" fill="#ffffff">${escapeXml(title)}</text>
-      <text x="320" y="265" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif"
-            font-size="20" fill="rgba(255,255,255,0.85)">ReSell demo listing image</text>
-    </svg>`;
-  const buffer = await sharp(Buffer.from(svg))
-    .resize(640, 480)
-    .jpeg({ quality: 88 })
+  if (transform === 'mirror') {
+    // Case 4 — horizontal flip to test mirror-hash detection
+    pipeline = pipeline.flop();
+  } else if (transform === 'rephotograph') {
+    // Case 2 — simulate re-photographed: 5% crop + brightness 1.1 + JPEG q70
+    const meta = await sharp(fs.readFileSync(filePath)).metadata();
+    const w = meta.width || 1200;
+    const h = meta.height || 1200;
+    const cropW = Math.round(w * 0.95);
+    const cropH = Math.round(h * 0.95);
+    const left = Math.round((w - cropW) / 2);
+    const top = Math.round((h - cropH) / 2);
+    pipeline = pipeline
+      .extract({ left, top, width: cropW, height: cropH })
+      .modulate({ brightness: 1.1 });
+  }
+
+  return pipeline
+    .resize({ width: 1200, height: 1200, fit: 'inside', withoutEnlargement: true })
+    .jpeg({ quality: transform === 'rephotograph' ? 70 : 80 })
     .toBuffer();
-  fs.writeFileSync(path.join(IMAGES_DIR, filename), buffer);
-  return buffer;
 };
 
 const buildProductDoc = (tpl, userId, categoryId, imageInfo, hash, mirrorHash, now) => {
@@ -316,13 +401,13 @@ const buildProductDoc = (tpl, userId, categoryId, imageInfo, hash, mirrorHash, n
     title: tpl.title,
     description: tpl.description,
     price: tpl.price,
-    originalPrice: tpl.originalPrice,
+    originalPrice: tpl.originalPrice || 0,
     category: categoryId,
-    brand: tpl.brand,
-    model: tpl.model,
+    brand: tpl.brand || '',
+    model: tpl.model || '',
     condition: tpl.condition,
-    yearsUsed: tpl.yearsUsed,
-    specifications: tpl.specs,
+    yearsUsed: tpl.yearsUsed || 0,
+    specifications: tpl.specs || [],
     location: { city: 'Bengaluru', state: 'KA', country: 'India' },
     images: [
       {
@@ -348,7 +433,11 @@ const buildProductDoc = (tpl, userId, categoryId, imageInfo, hash, mirrorHash, n
         maxPrice: Math.round(tpl.price * 1.12),
         confidence: 0.8,
         explanation: `Depreciation + condition adjustment for ${tpl.condition} ${tpl.title}.`,
-        factors: [`MSRP ${tpl.originalPrice}`, `Asking ${tpl.price}`, `${tpl.yearsUsed} year(s) used`],
+        factors: [
+          `MSRP ${tpl.originalPrice || 0}`,
+          `Asking ${tpl.price}`,
+          `${tpl.yearsUsed || 0} year(s) used`,
+        ],
         source: 'heuristic',
       },
       riskAssessment: {
@@ -365,6 +454,12 @@ const buildProductDoc = (tpl, userId, categoryId, imageInfo, hash, mirrorHash, n
 const seed = async () => {
   if (!process.env.MONGODB_URI) {
     console.error('[Seed] MONGODB_URI not set — create backend/.env (see backend/.env.example).');
+    process.exit(1);
+  }
+
+  // Ensure seed images exist
+  if (!fs.existsSync(IMAGES_DIR)) {
+    console.error('[Seed] Seed images directory not found. Run: node backend/scripts/download-seed-images.js');
     process.exit(1);
   }
 
@@ -443,22 +538,25 @@ const seed = async () => {
   }
   console.log(`[Seed] Categories created (${CATEGORIES.length})`);
 
-  const generatedImages = {};
-  for (const tpl of PRODUCTS) {
-    if (!generatedImages[tpl.image]) {
-      const buffer = await makePlaceholderImage({
-        filename: tpl.image,
-        title: tpl.title.split('—')[0].trim(),
-        colors: tpl.colors,
-      });
-      generatedImages[tpl.image] = buffer;
+  // Load real images once per unique filename+transform combo
+  const imageCache = {};
+  const getCacheKey = (filename, transform) => filename + (transform ? ':' + transform : '');
+
+  const allTemplates = [...PRODUCTS, ...DEMO_PRODUCTS];
+  for (const tpl of allTemplates) {
+    const key = getCacheKey(tpl.image, tpl.imageTransform);
+    if (!imageCache[key]) {
+      console.log(`[Seed] Loading image: ${key}`);
+      imageCache[key] = await loadImage(tpl.image, tpl.imageTransform);
     }
   }
 
+  // Create main products
   const products = [];
   for (let i = 0; i < PRODUCTS.length; i++) {
     const tpl = PRODUCTS[i];
-    const buffer = generatedImages[tpl.image];
+    const key = getCacheKey(tpl.image, tpl.imageTransform);
+    const buffer = imageCache[key];
     const hash = await perceptualHashFromBuffer(buffer);
     const mirrorHash = await mirrorPerceptualHashFromBuffer(buffer);
     const doc = buildProductDoc(
@@ -475,10 +573,45 @@ const seed = async () => {
   }
 
   const iphone = products[0];
-  const dupListing = products[1];
+  const dupListing = products[1]; // Same image as iphone — CASE 1
   const priyaProducts = products.filter((p) => p.seller.equals(usersByName.priya._id));
-  console.log(`[Seed] Products created (${products.length}) — 2 share iphone-13-midnight.jpg`);
+  console.log(`[Seed] Main products created (${products.length}) — 2 share iphone-13-midnight.jpg (CASE 1)`);
 
+  // Create DEMO products (cases 2, 3, 4)
+  const demoProducts = [];
+  for (let i = 0; i < DEMO_PRODUCTS.length; i++) {
+    const tpl = DEMO_PRODUCTS[i];
+    const key = getCacheKey(tpl.image, tpl.imageTransform);
+    const buffer = imageCache[key];
+    const hash = await perceptualHashFromBuffer(buffer);
+    const mirrorHash = await mirrorPerceptualHashFromBuffer(buffer);
+    // Mirror image filename suffix for serving
+    const servedFilename = tpl.imageTransform
+      ? `${tpl.image.replace('.jpg', '')}-${tpl.imageTransform}.jpg`
+      : tpl.image;
+    // Write transformed image to disk so it can be served
+    if (tpl.imageTransform) {
+      const destPath = path.join(IMAGES_DIR, servedFilename);
+      if (!fs.existsSync(destPath)) {
+        fs.writeFileSync(destPath, buffer);
+        console.log(`[Seed] Written transformed image: ${servedFilename}`);
+      }
+    }
+    const doc = buildProductDoc(
+      tpl,
+      usersByName[tpl.seller]._id,
+      categoriesByName[tpl.category]._id,
+      { url: `${BASE_URL}/public/seed-images/${servedFilename}` },
+      hash,
+      mirrorHash,
+      new Date(now - (PRODUCTS.length + i) * 3600 * 1000)
+    );
+    const product = await Product.create(doc);
+    demoProducts.push(product);
+  }
+  console.log(`[Seed] DEMO products created (${demoProducts.length}) — cases 2, 3, 4`);
+
+  // ── Sales (for priya trust score) ─────────────────────────────────────────
   const sales = [];
   const buyers = [arjun._id, meera._id, admin._id];
   for (let i = 0; i < 40; i++) {
@@ -581,26 +714,72 @@ const seed = async () => {
   await convo.save();
   console.log('[Seed] Conversation created (5 messages, priya ↔ arjun)');
 
-  const dupDoc = await Product.findById(dupListing._id).lean();
-  const risk = await detectRisk({
-    product: dupDoc,
-    hashes: dupDoc.aiAnalysis.imageHashes,
-    aiAnalysis: dupDoc.aiAnalysis,
-  });
-  await Product.updateOne(
-    { _id: dupListing._id },
-    {
-      $set: {
-        'aiAnalysis.riskAssessment': {
-          riskScore: risk.riskScore,
-          riskLevel: risk.riskLevel,
-          factors: risk.factors,
-          assessedAt: new Date(),
+  // ── Run detectRisk on all demo listings ────────────────────────────────────
+  console.log('\n[Seed] Running detectRisk on duplicate-demo listings...');
+  const allDemoAndDup = [dupListing, ...demoProducts];
+  const riskTable = [];
+
+  for (const listing of allDemoAndDup) {
+    const freshDoc = await Product.findById(listing._id).lean();
+    const risk = await detectRisk({
+      product: freshDoc,
+      hashes: freshDoc.aiAnalysis.imageHashes,
+      aiAnalysis: freshDoc.aiAnalysis,
+    });
+    await Product.updateOne(
+      { _id: listing._id },
+      {
+        $set: {
+          'aiAnalysis.riskAssessment': {
+            riskScore: risk.riskScore,
+            riskLevel: risk.riskLevel,
+            factors: risk.factors,
+            assessedAt: new Date(),
+          },
         },
-      },
-    }
-  );
-  console.log(`[Seed] Duplicate-flag listing scored by detectRisk() → risk ${risk.riskScore} (${risk.riskLevel})`);
+      }
+    );
+    const caseLabel = listing._id.equals(dupListing._id)
+      ? 'CASE 1'
+      : freshDoc.title.match(/CASE (\d)/)?.[0] || '?';
+    riskTable.push({
+      case: caseLabel,
+      title: freshDoc.title.substring(0, 45),
+      riskScore: risk.riskScore,
+      riskLevel: risk.riskLevel,
+      factors: risk.factors.join('; ') || '(none)',
+    });
+  }
+
+  console.log('\n╔══════════════════════════════════════════════════════════════════════════════╗');
+  console.log('║         DUPLICATE DETECTION DEMO — Risk Assessment Table                   ║');
+  console.log('╚══════════════════════════════════════════════════════════════════════════════╝');
+
+  // Note about Redis requirement
+  const redisAvailable = await (async () => {
+    try {
+      const { connection } = require('../src/queues');
+      if (connection && connection.status === 'ready') return true;
+    } catch {}
+    return false;
+  })();
+
+  if (!redisAvailable) {
+    console.log('⚠  NOTE: Redis/BullMQ workers are NOT running. The riskScore below is from');
+    console.log('   detectRisk() (pHash + pricing heuristics). Full CNN/CLIP signals require');
+    console.log('   the imageProcessor worker (npm run worker) with Redis.\n');
+  }
+
+  console.log('Case     | Title                                          | Score | Level  | Factors fired');
+  console.log('---------|------------------------------------------------|-------|--------|------------------');
+  for (const row of riskTable) {
+    const c = row.case.padEnd(8);
+    const t = row.title.substring(0, 46).padEnd(46);
+    const s = String(row.riskScore).padEnd(5);
+    const l = row.riskLevel.padEnd(6);
+    console.log(`${c} | ${t} | ${s} | ${l} | ${row.factors.substring(0, 60)}`);
+  }
+  console.log('');
 
   console.log('\n[Seed] Done! Demo credentials (password for all users):');
   console.log('  ' + PASSWORD);
@@ -609,7 +788,7 @@ const seed = async () => {
     console.log(`  ${name.padEnd(6)} ${u.email.padEnd(22)} ${u.role}`);
   }
   console.log('──────────────────────────────────────────────');
-  console.log(`[Seed] Seed images written to ${IMAGES_DIR}`);
+  console.log(`[Seed] Real product images served from ${IMAGES_DIR}`);
 
   await mongoose.disconnect();
   process.exit(0);
