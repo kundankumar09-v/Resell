@@ -64,6 +64,7 @@ export default function SellProduct() {
   const [aiLoading, setAiLoading] = useState(false);
   const [images, setImages] = useState([]);
   const [uploading, setUploading] = useState(false);
+  const [dragActive, setDragActive] = useState(false);
   const { rates } = useCurrency();
   const [selectedCurrency, setSelectedCurrency] = useState('INR');
   const locationDetector = useLocationDetector();
@@ -238,8 +239,8 @@ export default function SellProduct() {
     }
   };
 
-  const handleImageUpload = async (e) => {
-    const files = Array.from(e.target.files || []);
+  const processFiles = async (fileList) => {
+    const files = Array.from(fileList || []);
     if (!files.length) return;
     if (images.length + files.length > MAX_IMAGES) {
       toast.error(`Maximum ${MAX_IMAGES} images allowed`);
@@ -284,9 +285,20 @@ export default function SellProduct() {
       }
     } finally {
       setUploading(false);
-      // reset input so same file can be selected again if needed
-      if (fileInputRef.current) fileInputRef.current.value = '';
     }
+  };
+
+  const handleImageUpload = async (e) => {
+    await processFiles(e.target.files);
+    // reset input so same file can be selected again if needed
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const handleDrop = async (e) => {
+    e.preventDefault();
+    setDragActive(false);
+    if (uploading) return;
+    await processFiles(e.dataTransfer?.files);
   };
 
   const removeImage = (idx) => {
@@ -670,6 +682,17 @@ export default function SellProduct() {
                   </motion.span>
                 ))}
               </div>
+              <div className="mt-3 h-1.5 rounded-full bg-slate-200 dark:bg-slate-800 overflow-hidden">
+                <motion.div
+                  className="h-full rounded-full bg-gradient-to-r from-brand-500 to-accent-500"
+                  initial={false}
+                  animate={{ width: `${(step / (STEPS.length - 1)) * 100}%` }}
+                  transition={{ type: 'spring', stiffness: 260, damping: 30 }}
+                />
+              </div>
+              <p className="mt-2 text-center text-xs text-slate-400">
+                Step {step + 1} of {STEPS.length}
+              </p>
             </motion.div>
           </ScrollReveal>
 
@@ -713,7 +736,17 @@ export default function SellProduct() {
 
                     <div
                       onClick={() => !uploading && fileInputRef.current?.click()}
-                      className={cn("border-2 border-dashed border-slate-300 rounded-2xl p-12 text-center transition-all group", uploading ? "opacity-70 cursor-not-allowed" : "hover:border-brand-400 hover:bg-brand-50/30 cursor-pointer")}
+                      onDragOver={(e) => { e.preventDefault(); if (!uploading) setDragActive(true); }}
+                      onDragLeave={() => setDragActive(false)}
+                      onDrop={handleDrop}
+                      className={cn(
+                        "border-2 border-dashed rounded-2xl p-12 text-center transition-all group",
+                        uploading
+                          ? "opacity-70 cursor-not-allowed border-slate-300"
+                          : dragActive
+                          ? "border-brand-500 bg-brand-50/70 dark:bg-brand-500/10 scale-[1.01] shadow-soft-lg cursor-copy"
+                          : "border-slate-300 hover:border-brand-400 hover:bg-brand-50/30 cursor-pointer"
+                      )}
                     >
                       {uploading ? (
                         <motion.div className="flex flex-col items-center gap-3">
@@ -729,7 +762,9 @@ export default function SellProduct() {
                           >
                             <Upload className="w-16 h-16" />
                           </motion.div>
-                          <p className="font-medium text-slate-700">Click to upload images</p>
+                          <p className="font-medium text-slate-700">
+                            {dragActive ? 'Drop your images here' : 'Click or drag images to upload'}
+                          </p>
                           <p className="text-sm text-slate-500 mt-1">PNG, JPG up to 10MB each</p>
                         </>
                       )}

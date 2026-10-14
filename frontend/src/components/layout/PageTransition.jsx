@@ -2,15 +2,15 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { useLocation } from 'react-router-dom';
 
 const pageVariants = {
-  initial: { opacity: 0, y: 20, filter: 'blur(8px)' },
-  enter: { opacity: 1, y: 0, filter: 'blur(0px)' },
-  exit: { opacity: 0, y: -20, filter: 'blur(8px)' },
+  initial: { opacity: 0, y: 12 },
+  enter: { opacity: 1, y: 0 },
+  exit: { opacity: 0, y: -8 },
 };
 
 const pageTransition = {
   type: 'tween',
-  ease: [0.25, 0.46, 0.45, 0.94],
-  duration: 0.4,
+  ease: [0.22, 1, 0.36, 1],
+  duration: 0.22,
 };
 
 export default function PageTransition({ children, className = '' }) {

@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import {
   motion,
   useMotionValue,
@@ -7,7 +7,7 @@ import {
   useTransform,
   useScroll,
 } from 'framer-motion';
-import { ArrowRight, ChevronDown, Sparkles } from 'lucide-react';
+import { ArrowRight, ChevronDown, Sparkles, Search } from 'lucide-react';
 import { productService } from '../../services/services';
 import useFormatPrice from '../../hooks/useFormatPrice';
 import { useAuth } from '../../contexts/AuthContext';
@@ -149,9 +149,16 @@ function MouseParallax({ children, depth = 1 }) {
 
 export default function Hero() {
   const { user } = useAuth();
+  const navigate = useNavigate();
   const sectionRef = useRef(null);
   const formatPrice = useFormatPrice('USD');
   const trending = useTrendingProducts();
+  const [query, setQuery] = useState('');
+
+  const handleSearch = (e) => {
+    e.preventDefault();
+    if (query.trim()) navigate(`/marketplace?q=${encodeURIComponent(query.trim())}`);
+  };
 
   const mx = useMotionValue(0);
   const my = useMotionValue(0);
@@ -178,6 +185,15 @@ export default function Hero() {
       onMouseMove={handleMouseMove}
       className="relative flex min-h-[100svh] w-full items-center justify-center overflow-hidden"
     >
+      {/* Animated mesh-gradient backdrop */}
+      <div className="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden="true">
+        <div className="absolute inset-0 bg-mesh-gradient opacity-60" />
+        <div className="ag-blob ag-blob-1" />
+        <div className="ag-blob ag-blob-2" />
+        <div className="ag-blob ag-blob-3" />
+        <div className="absolute inset-0 bg-gradient-to-b from-white/10 via-white/40 to-slate-50 dark:from-transparent dark:via-transparent dark:to-transparent" />
+      </div>
+
       <MouseParallaxProvider value={{ x: sx, y: sy }}>
         {/* Floating product cards around the hero (live trending items) */}
         {trending.map((p, i) => (
@@ -248,6 +264,33 @@ export default function Hero() {
               </Link>
             )}
           </motion.div>
+
+          {/* Rounded-full hero search */}
+          <motion.form
+            onSubmit={handleSearch}
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 1.0, duration: 0.6, ease: 'easeOut' }}
+            className="mt-9 w-full max-w-xl"
+          >
+            <div className="group relative flex items-center rounded-full border border-white/70 bg-white/80 p-1.5 shadow-soft-lg backdrop-blur-xl transition-all duration-250 focus-within:border-brand-300 focus-within:shadow-glow dark:border-white/10 dark:bg-white/5">
+              <Search className="ml-4 h-5 w-5 text-slate-400" />
+              <input
+                type="text"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Search for anything…"
+                aria-label="Search marketplace"
+                className="min-w-0 flex-1 bg-transparent px-3 py-2.5 text-sm text-slate-800 outline-none placeholder:text-slate-400 dark:text-slate-100"
+              />
+              <button
+                type="submit"
+                className="btn-primary rounded-full px-6 py-2.5"
+              >
+                Search
+              </button>
+            </div>
+          </motion.form>
 
           {/* Stats */}
           <motion.div

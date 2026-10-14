@@ -27,6 +27,38 @@ const conditionEvidenceAvailable = (aiAnalysis) =>
 // same way as the backend (>= 50 high, >= 25 medium, else low).
 const damageLevelOf = (score) => (score >= 50 ? 'high' : score >= 25 ? 'medium' : 'low');
 
+// Circular risk gauge (ring) — visualises riskScore out of 100.
+function RiskRing({ score = 0, level = 'low' }) {
+  const clamped = Math.max(0, Math.min(100, score));
+  const R = 26;
+  const C = 2 * Math.PI * R;
+  const stroke =
+    level === 'low' ? '#10b981' : level === 'medium' ? '#f59e0b' : '#f43f5e';
+  return (
+    <div className="relative h-16 w-16 flex-shrink-0" title={`Risk score ${clamped}/100`}>
+      <svg viewBox="0 0 64 64" className="h-full w-full -rotate-90">
+        <circle cx="32" cy="32" r={R} fill="none" className="stroke-slate-200" strokeWidth="7" />
+        <motion.circle
+          cx="32"
+          cy="32"
+          r={R}
+          fill="none"
+          stroke={stroke}
+          strokeWidth="7"
+          strokeLinecap="round"
+          strokeDasharray={C}
+          initial={{ strokeDashoffset: C }}
+          animate={{ strokeDashoffset: C - (clamped / 100) * C }}
+          transition={{ duration: 1, delay: 0.4, ease: 'easeOut' }}
+        />
+      </svg>
+      <div className="absolute inset-0 grid place-items-center">
+        <span className="text-sm font-bold text-slate-900 dark:text-slate-100">{clamped}</span>
+      </div>
+    </div>
+  );
+}
+
 export default function AIAnalysisPanel({ aiAnalysis, currencyCode }) {
   // Prices are displayed in the listing's currency (canonical backend value)
   const formatPrice = useFormatPrice(currencyCode || 'USD');
@@ -47,11 +79,17 @@ export default function AIAnalysisPanel({ aiAnalysis, currencyCode }) {
       transition={{ delay: 0.2 }}
       className="card p-6 space-y-6"
     >
-      <div className="flex items-center gap-2">
-        <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-brand-600 to-accent-500 grid place-items-center">
-          <Sparkles className="w-4 h-4 text-white" />
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-brand-600 to-accent-500 grid place-items-center">
+            <Sparkles className="w-4 h-4 text-white" />
+          </div>
+          <div>
+            <h3 className="font-display font-bold text-lg">Trust &amp; AI Insights</h3>
+            <p className="text-[11px] text-slate-500 -mt-0.5">Transparent, evidence-based signals</p>
+          </div>
         </div>
-        <h3 className="font-display font-bold text-lg">AI Analysis</h3>
+        {risk && <RiskRing score={risk.riskScore || 0} level={risk.riskLevel} />}
       </div>
 
       {/* Price Recommendation — its own pricing confidence (evidence-based,

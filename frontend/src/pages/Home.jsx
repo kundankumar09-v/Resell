@@ -148,6 +148,28 @@ export default function Home() {
           </div>
         </ScrollReveal>
 
+        {/* Category chips */}
+        {categories.length > 0 && (
+          <div className="flex snap-x gap-2 overflow-x-auto scrollbar-thin-x pb-4 mb-6 -mx-4 px-4 md:mx-0 md:px-0">
+            <button
+              onClick={() => navigate('/marketplace')}
+              className="flex-shrink-0 snap-start rounded-full bg-slate-900 px-4 py-2 text-sm font-medium text-white transition-all hover:-translate-y-0.5 dark:bg-white dark:text-slate-900"
+            >
+              All
+            </button>
+            {categories.slice(0, 12).map((cat) => (
+              <button
+                key={`chip-${cat._id}`}
+                onClick={() => navigate(`/marketplace?category=${cat._id}`)}
+                className="flex-shrink-0 snap-start rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition-all hover:-translate-y-0.5 hover:border-brand-300 hover:bg-brand-50 hover:text-brand-700"
+              >
+                <span className="mr-1.5">{ICON_MAP[cat.icon] || '📦'}</span>
+                {cat.name}
+              </button>
+            ))}
+          </div>
+        )}
+
         <RevealOnScroll delay={0.1} className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
           {categories.slice(0, 10).map((cat, i) => (
             <motion.button
@@ -217,6 +239,34 @@ export default function Home() {
           )}
         </RevealOnScroll>
       </section>
+
+      {/* Recommended — horizontal scroll-snap row */}
+      {!loading && products.length > 0 && (
+        <section className="py-8 md:py-12 relative z-10">
+          <div className="container-page">
+            <ScrollReveal direction="up">
+              <div className="flex items-center justify-between mb-6">
+                <div>
+                  <h2 className="font-display font-bold text-2xl md:text-3xl mb-1">Recommended for you</h2>
+                  <p className="text-slate-500 text-sm">Handpicked picks based on what's trending</p>
+                </div>
+                <Link to="/marketplace" className="hidden sm:inline-flex items-center gap-2 text-brand-600 hover:underline font-medium text-sm">
+                  Browse all <ArrowRight className="w-4 h-4" />
+                </Link>
+              </div>
+            </ScrollReveal>
+          </div>
+          <div className="container-page">
+            <div className="flex snap-x snap-mandatory gap-5 overflow-x-auto scrollbar-thin-x pb-4 -mx-4 px-4">
+              {products.slice(0, 8).map((p, i) => (
+                <div key={`rec-${p._id}`} className="w-[260px] flex-shrink-0 snap-start">
+                  <ProductCard product={p} index={i} />
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
+      )}
 
       {/* Features Section */}
       <section className="container-page py-20 md:py-28 relative z-10">

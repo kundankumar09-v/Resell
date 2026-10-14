@@ -194,13 +194,20 @@ export default function Marketplace() {
                   id="cat-pill-all"
                   whileTap={{ scale: 0.95 }}
                   onClick={() => setFilter('category', '')}
-                  className={`flex-shrink-0 px-4 py-1.5 rounded-full text-sm font-medium border transition-all ${
+                  className={`relative flex-shrink-0 rounded-full border px-4 py-1.5 text-sm font-medium transition-all ${
                     !filters.category
-                      ? 'bg-brand-600 text-white border-brand-600 shadow-md shadow-brand-500/25'
-                      : 'bg-white text-slate-700 border-slate-200 hover:border-brand-300 hover:bg-brand-50'
+                      ? 'border-brand-600 text-white'
+                      : 'border-slate-200 bg-white text-slate-700 hover:border-brand-300 hover:bg-brand-50'
                   }`}
                 >
-                  All Categories
+                  {!filters.category && (
+                    <motion.span
+                      layoutId="active-cat-pill"
+                      className="absolute inset-0 rounded-full bg-brand-600 shadow-md shadow-brand-500/25"
+                      transition={{ type: 'spring', stiffness: 420, damping: 34 }}
+                    />
+                  )}
+                  <span className="relative z-10">All Categories</span>
                 </motion.button>
                 {categoriesWithCounts.map((cat) => (
                   <motion.button
@@ -208,21 +215,28 @@ export default function Marketplace() {
                     id={`cat-pill-${cat.slug}`}
                     whileTap={{ scale: 0.95 }}
                     onClick={() => setFilter('category', cat._id)}
-                    className={`flex-shrink-0 flex items-center gap-1.5 px-4 py-1.5 rounded-full text-sm font-medium border transition-all ${
+                    className={`relative flex-shrink-0 flex items-center gap-1.5 rounded-full border px-4 py-1.5 text-sm font-medium transition-all ${
                       filters.category === cat._id
-                        ? 'bg-brand-600 text-white border-brand-600 shadow-md shadow-brand-500/25'
-                        : 'bg-white text-slate-700 border-slate-200 hover:border-brand-300 hover:bg-brand-50'
+                        ? 'border-brand-600 text-white'
+                        : 'border-slate-200 bg-white text-slate-700 hover:border-brand-300 hover:bg-brand-50'
                     }`}
                   >
-                    <span>{getCategoryEmoji(cat)}</span>
-                    <span>{cat.name}</span>
-                    {cat.count > 0 && (
-                      <span className={`text-xs ${
-                        filters.category === cat._id ? 'text-white/80' : 'text-slate-400'
-                      }`}>
-                        {cat.count}
-                      </span>
+                    {filters.category === cat._id && (
+                      <motion.span
+                        layoutId="active-cat-pill"
+                        className="absolute inset-0 rounded-full bg-brand-600 shadow-md shadow-brand-500/25"
+                        transition={{ type: 'spring', stiffness: 420, damping: 34 }}
+                      />
                     )}
+                    <span className="relative z-10 flex items-center gap-1.5">
+                      <span>{getCategoryEmoji(cat)}</span>
+                      <span>{cat.name}</span>
+                      {cat.count > 0 && (
+                        <span className={`text-xs ${filters.category === cat._id ? 'text-white/80' : 'text-slate-400'}`}>
+                          {cat.count}
+                        </span>
+                      )}
+                    </span>
                   </motion.button>
                 ))}
               </div>
@@ -265,9 +279,9 @@ export default function Marketplace() {
             </ScrollReveal>
           )}
 
-          {/* Search & Filter Bar */}
-          <ScrollReveal delay={0.1} direction="up">
-            <div className="flex flex-col sm:flex-row gap-3 mb-6">
+          {/* Search & Filter Bar (sticky) */}
+          <div className="sticky top-[76px] z-30 mb-6 rounded-2xl border border-slate-200/60 bg-white/85 px-3 py-3 shadow-soft-sm backdrop-blur-xl transition-all dark:border-white/10 dark:bg-slate-900/70">
+            <div className="flex flex-col sm:flex-row gap-3">
               <div className="relative flex-1">
                 <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
                 <input
@@ -308,32 +322,49 @@ export default function Marketplace() {
                 </select>
               </div>
             </div>
-          </ScrollReveal>
+          </div>
 
           {/* Filters Panel */}
+          {showFilters && (
+            <div
+              onClick={() => setShowFilters(false)}
+              aria-hidden="true"
+              className="fixed inset-0 z-40 bg-slate-900/40 backdrop-blur-sm md:hidden"
+            />
+          )}
           <AnimatePresence>
             {showFilters && (
               <ScrollReveal delay={0.2} direction="down">
                 <motion.div
-                  initial={{ height: 0, opacity: 0 }}
-                  animate={{ height: 'auto', opacity: 1 }}
-                  exit={{ height: 0, opacity: 0 }}
-                  className="overflow-hidden mb-6"
+                  initial={{ opacity: 0, y: 24 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: 24 }}
+                  transition={{ type: 'spring', stiffness: 320, damping: 32 }}
+                  className="fixed inset-x-0 bottom-0 z-50 max-h-[85vh] overflow-y-auto px-3 pb-4 md:static md:inset-auto md:z-auto md:mb-6 md:max-h-none md:overflow-visible md:px-0 md:pb-0"
                 >
-                  <div className="card p-5">
+                  <div className="card p-5 rounded-b-none md:rounded-2xl">
                     <div className="flex items-center justify-between mb-4">
                       <h3 className="font-display font-semibold">Filters</h3>
-                      {activeFilterCount > 0 && (
+                      <div className="flex items-center gap-3">
+                        {activeFilterCount > 0 && (
+                          <button
+                            onClick={clearFilters}
+                            className="text-sm text-slate-500 hover:text-red-600 flex items-center gap-1"
+                          >
+                            <X className="w-3 h-3" />
+                            Clear all
+                          </button>
+                        )}
                         <button
-                          onClick={clearFilters}
-                          className="text-sm text-slate-500 hover:text-red-600 flex items-center gap-1"
+                          onClick={() => setShowFilters(false)}
+                          aria-label="Close filters"
+                          className="md:hidden w-8 h-8 grid place-items-center rounded-full bg-slate-100 text-slate-500 hover:bg-slate-200 transition"
                         >
-                          <X className="w-3 h-3" />
-                          Clear all
+                          <X className="w-4 h-4" />
                         </button>
-                      )}
+                      </div>
                     </div>
-                    <div className="grid md:grid-cols-3 lg:grid-cols-6 gap-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
                       <select
                         value={filters.category}
                         onChange={(e) => setFilter('category', e.target.value)}
@@ -388,6 +419,17 @@ export default function Marketplace() {
                         className="input"
                       />
                     </div>
+                    <select
+                      value={filters.sort}
+                      onChange={(e) => setFilter('sort', e.target.value)}
+                      className="input mt-3 sm:hidden"
+                    >
+                      <option value="newest">Newest</option>
+                      <option value="oldest">Oldest</option>
+                      <option value="price-asc">Price: Low to High</option>
+                      <option value="price-desc">Price: High to Low</option>
+                      <option value="popular">Most Popular</option>
+                    </select>
                   </div>
                 </motion.div>
               </ScrollReveal>

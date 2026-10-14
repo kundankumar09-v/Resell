@@ -604,19 +604,36 @@ export default function Chat() {
                           Start the conversation...
                         </motion.div>
                       ) : (
-                        messages.map((msg) => {
+                        messages.map((msg, idx) => {
                           const isMe = msg.sender._id === user._id;
                           const outgoing = isMe;
                           const readByOthers = msg.readBy?.some(
                             (r) => r.user !== user._id
                           );
+                          const prev = messages[idx - 1];
+                          const showDate =
+                            !prev ||
+                            new Date(prev.createdAt).toDateString() !==
+                              new Date(msg.createdAt).toDateString();
                           return (
-                            <motion.div
-                              key={msg._id}
-                              initial={{ opacity: 0, y: 20 }}
-                              animate={{ opacity: 1, y: 0 }}
-                              className={cn('flex', isMe ? 'justify-end' : 'justify-start')}
-                            >
+                            <div key={msg._id} className="animate-message-in">
+                              {showDate && (
+                                <div className="my-1 mb-2 flex items-center gap-3">
+                                  <span className="h-px flex-1 bg-slate-200 dark:bg-slate-700" />
+                                  <span className="text-[10px] font-medium uppercase tracking-wide text-slate-400">
+                                    {new Date(msg.createdAt).toLocaleDateString(undefined, {
+                                      month: 'short',
+                                      day: 'numeric',
+                                    })}
+                                  </span>
+                                  <span className="h-px flex-1 bg-slate-200 dark:bg-slate-700" />
+                                </div>
+                              )}
+                              <motion.div
+                                initial={{ opacity: 0, y: 20 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                className={cn('flex', isMe ? 'justify-end' : 'justify-start')}
+                              >
                               <div
                                 className={cn(
                                   'max-w-[70%] rounded-2xl px-4 py-2.5',
@@ -670,7 +687,8 @@ export default function Chat() {
                                   )}
                                 </div>
                               </div>
-                            </motion.div>
+                              </motion.div>
+                            </div>
                           );
                         })
                       )}

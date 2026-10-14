@@ -281,7 +281,7 @@ export default function ProductDetail() {
     <PageTransition>
       <div className="relative">
 
-        <div className="container-page py-8 relative z-10">
+        <div className="container-page py-8 pb-28 lg:pb-8 relative z-10">
           {/* Back button */}
           <ScrollReveal direction="left">
             <button
@@ -759,6 +759,29 @@ export default function ProductDetail() {
             />
           )}
         </AnimatePresence>
+
+        {/* Sticky mobile action bar */}
+        {product.status !== 'sold' && (
+          <div className="lg:hidden fixed inset-x-0 bottom-0 z-40 border-t border-slate-200/70 bg-white/90 px-4 py-3 backdrop-blur-xl shadow-[0_-8px_30px_-12px_rgba(15,23,42,0.25)] dark:border-white/10 dark:bg-slate-900/90">
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => setShowOfferModal(true)}
+                className="btn-secondary flex-1 py-3"
+              >
+                <Tag className="w-5 h-5" />
+                Offer
+              </button>
+              <MagneticButton
+                onClick={handleContactSeller}
+                className="flex-[1.4] btn-primary py-3"
+                strength={0.15}
+              >
+                <MessageCircle className="w-5 h-5" />
+                Chat with Seller
+              </MagneticButton>
+            </div>
+          </div>
+        )}
       </div>
     </PageTransition>
   );

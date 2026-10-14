@@ -40,10 +40,10 @@ export default function AdminLayout({ children, title }) {
       <motion.aside
         initial={{ x: -300 }}
         animate={{ x: 0 }}
-        className="w-64 bg-white border-r border-slate-200 flex flex-col fixed h-screen z-40"
+        className="w-64 bg-white border-r border-slate-200 flex flex-col fixed h-screen z-40 shadow-soft-lg"
       >
         <Link to="/" className="flex items-center gap-2 p-6 border-b border-slate-200">
-          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-brand-600 to-accent-500 grid place-items-center shadow-lg shadow-brand-500/30">
+          <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-brand-600 to-accent-500 grid place-items-center shadow-pop">
             <span className="text-white font-bold">R</span>
           </div>
           <div>
@@ -65,12 +65,19 @@ export default function AdminLayout({ children, title }) {
                 transition={{ delay: i * 0.04 }}
                 whileHover={{ x: 4 }}
                 className={cn(
-                  'flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition',
+                  'relative flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition',
                   active
-                    ? 'bg-brand-50 text-brand-700 shadow-sm'
-                    : 'text-slate-600 hover:bg-slate-50'
+                    ? 'bg-brand-50 text-brand-700 shadow-soft-sm'
+                    : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
                 )}
               >
+                {active && (
+                  <motion.span
+                    layoutId="admin-nav-active"
+                    className="absolute left-0 top-1/2 h-5 w-1 -translate-y-1/2 rounded-full bg-gradient-to-b from-brand-500 to-accent-500"
+                    transition={{ type: 'spring', stiffness: 420, damping: 34 }}
+                  />
+                )}
                 <Icon className="w-4 h-4" />
                 {item.label}
                 {active && <ChevronRight className="w-4 h-4 ml-auto" />}
@@ -117,13 +124,29 @@ export default function AdminLayout({ children, title }) {
       >
         <div className="p-8">
           {title && (
-            <motion.h1
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="font-display font-bold text-3xl mb-6"
-            >
-              {title}
-            </motion.h1>
+            <div className="mb-6">
+              <motion.p
+                initial={{ opacity: 0, y: -8 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="text-xs font-medium uppercase tracking-wider text-slate-400 mb-1"
+              >
+                Admin / {title}
+              </motion.p>
+              <motion.h1
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="font-display font-bold text-3xl"
+              >
+                {title}
+              </motion.h1>
+              <motion.span
+                initial={{ scaleX: 0 }}
+                animate={{ scaleX: 1 }}
+                style={{ originX: 0 }}
+                transition={{ delay: 0.15, duration: 0.4, ease: 'easeOut' }}
+                className="mt-3 block h-1 w-16 rounded-full bg-gradient-to-r from-brand-500 to-accent-500"
+              />
+            </div>
           )}
           {children}
         </div>
