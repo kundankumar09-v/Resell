@@ -1,7 +1,7 @@
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useMemo, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Search, SlidersHorizontal, X, Filter } from 'lucide-react';
+import { Search, SlidersHorizontal, X, ChevronLeft, ChevronRight } from 'lucide-react';
 import { productService, categoryService } from '../services/services';
 import { useCurrency } from '../contexts/CurrencyContext';
 import { convertPrice } from '../utils/currency';
@@ -13,15 +13,52 @@ import PageTransition from '../components/layout/PageTransition';
 import { ScrollReveal, RevealOnScroll } from '../components/ui/ScrollReveal';
 import MagneticButton from '../components/ui/MagneticButton';
 
+// Map category icon names (from Category.icon) → emoji
+const ICON_EMOJI = {
+  smartphone: '📱',
+  phone: '📱',
+  laptop: '💻',
+  computer: '🖥️',
+  shirt: '👕',
+  fashion: '👗',
+  home: '🏠',
+  garden: '🌿',
+  activity: '🏋️',
+  sports: '⚽',
+  book: '📚',
+  gamepad: '🎮',
+  heart: '💄',
+  beauty: '✨',
+  truck: '🚗',
+  car: '🚗',
+  camera: '📷',
+  music: '🎵',
+  toy: '🧸',
+};
+
+const getCategoryEmoji = (cat) => {
+  if (!cat) return '📦';
+  const icon = (cat.icon || '').toLowerCase();
+  if (ICON_EMOJI[icon]) return ICON_EMOJI[icon];
+  // Try slug-based fallback
+  const slug = (cat.slug || '').toLowerCase();
+  for (const [key, emoji] of Object.entries(ICON_EMOJI)) {
+    if (slug.includes(key)) return emoji;
+  }
+  return '📦';
+};
+
 export default function Marketplace() {
   const [searchParams, setSearchParams] = useSearchParams();
   const { currency, rates } = useCurrency();
   const [products, setProducts] = useState([]);
   const [categories, setCategories] = useState([]);
+  const [categoryStats, setCategoryStats] = useState([]);
   const [brands, setBrands] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(null);
   const [showFilters, setShowFilters] = useState(false);
+  const pillsRef = useRef(null);
   const [filters, setFilters] = useState({
     q: searchParams.get('q') || '',
     category: searchParams.get('category') || '',
@@ -36,9 +73,25 @@ export default function Marketplace() {
   const [pagination, setPagination] = useState({ page: 1, pages: 1, total: 0 });
 
   useEffect(() => {
-    categoryService.list().then((r) => setCategories(r.data.categories));
-    productService.brands().then((r) => setBrands(r.data.brands));
+    categoryService.list().then((r) => setCategories(r.data.categories)).catch(() => {});
+    categoryService.stats().then((r) => setCategoryStats(r.data.stats || [])).catch(() => {});
+    productService.brands().then((r) => setBrands(r.data.brands)).catch(() => {});
   }, []);
+
+  // Merge categories with stats counts
+  const categoriesWithCounts = useMemo(() => {
+    const countMap = {};
+    for (const s of categoryStats) {
+      countMap[s._id] = s.count;
+    }
+    return categories.map((c) => ({ ...c, count: countMap[c._id] || 0 }));
+  }, [categories, categoryStats]);
+
+  const scrollPills = (dir) => {
+    if (pillsRef.current) {
+      pillsRef.current.scrollBy({ left: dir * 200, behavior: 'smooth' });
+    }
+  };
 
   useEffect(() => {
     setLoading(true);
@@ -101,7 +154,7 @@ export default function Marketplace() {
         <div className="container-page py-8 md:py-12 relative z-10">
           {/* Header */}
           <ScrollReveal direction="up">
-            <div className="mb-8">
+            <div className="mb-6">
               <motion.h1
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
@@ -119,6 +172,98 @@ export default function Marketplace() {
               </motion.p>
             </div>
           </ScrollReveal>
+
+          {/* ── Category pill row (OLX-style) ── */}
+          <ScrollReveal delay={0.08} direction="up">
+            <div className="relative mb-5">
+              {/* Scroll arrows — desktop only */}
+              <button
+                onClick={() => scrollPills(-1)}
+                className="hidden md:flex absolute left-0 top-1/2 -translate-y-1/2 -translate-x-3 z-10 w-8 h-8 rounded-full bg-white border border-slate-200 shadow items-center justify-center hover:bg-slate-50 transition"
+                aria-label="Scroll categories left"
+              >
+                <ChevronLeft className="w-4 h-4 text-slate-500" />
+              </button>
+              <div
+                ref={pillsRef}
+                className="flex gap-2 overflow-x-auto scrollbar-hide pb-1 md:px-4"
+                style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}
+              >
+                {/* All Categories pill */}
+                <motion.button
+                  id="cat-pill-all"
+                  whileTap={{ scale: 0.95 }}
+                  onClick={() => setFilter('category', '')}
+                  className={`flex-shrink-0 px-4 py-1.5 rounded-full text-sm font-medium border transition-all ${
+                    !filters.category
+                      ? 'bg-brand-600 text-white border-brand-600 shadow-md shadow-brand-500/25'
+                      : 'bg-white text-slate-700 border-slate-200 hover:border-brand-300 hover:bg-brand-50'
+                  }`}
+                >
+                  All Categories
+                </motion.button>
+                {categoriesWithCounts.map((cat) => (
+                  <motion.button
+                    key={cat._id}
+                    id={`cat-pill-${cat.slug}`}
+                    whileTap={{ scale: 0.95 }}
+                    onClick={() => setFilter('category', cat._id)}
+                    className={`flex-shrink-0 flex items-center gap-1.5 px-4 py-1.5 rounded-full text-sm font-medium border transition-all ${
+                      filters.category === cat._id
+                        ? 'bg-brand-600 text-white border-brand-600 shadow-md shadow-brand-500/25'
+                        : 'bg-white text-slate-700 border-slate-200 hover:border-brand-300 hover:bg-brand-50'
+                    }`}
+                  >
+                    <span>{getCategoryEmoji(cat)}</span>
+                    <span>{cat.name}</span>
+                    {cat.count > 0 && (
+                      <span className={`text-xs ${
+                        filters.category === cat._id ? 'text-white/80' : 'text-slate-400'
+                      }`}>
+                        {cat.count}
+                      </span>
+                    )}
+                  </motion.button>
+                ))}
+              </div>
+              <button
+                onClick={() => scrollPills(1)}
+                className="hidden md:flex absolute right-0 top-1/2 -translate-y-1/2 translate-x-3 z-10 w-8 h-8 rounded-full bg-white border border-slate-200 shadow items-center justify-center hover:bg-slate-50 transition"
+                aria-label="Scroll categories right"
+              >
+                <ChevronRight className="w-4 h-4 text-slate-500" />
+              </button>
+            </div>
+          </ScrollReveal>
+
+          {/* ── Category tile grid (OLX-style icon grid) ── */}
+          {!filters.category && categoriesWithCounts.length > 0 && (
+            <ScrollReveal delay={0.12} direction="up">
+              <div className="mb-6">
+                <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-8 xl:grid-cols-10 gap-3">
+                  {categoriesWithCounts.map((cat, i) => (
+                    <motion.button
+                      key={cat._id}
+                      id={`cat-tile-${cat.slug}`}
+                      initial={{ opacity: 0, y: 12 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ delay: i * 0.04 }}
+                      whileHover={{ y: -2, scale: 1.04 }}
+                      whileTap={{ scale: 0.95 }}
+                      onClick={() => setFilter('category', cat._id)}
+                      className="flex flex-col items-center gap-1.5 p-3 rounded-2xl bg-white border border-slate-100 hover:border-brand-200 hover:bg-brand-50/40 shadow-sm hover:shadow-md transition-all group"
+                    >
+                      <span className="text-2xl group-hover:scale-110 transition-transform">{getCategoryEmoji(cat)}</span>
+                      <span className="text-xs font-medium text-slate-700 text-center leading-tight line-clamp-2">{cat.name}</span>
+                      {cat.count > 0 && (
+                        <span className="text-[10px] text-slate-400 font-normal">{cat.count} listing{cat.count !== 1 ? 's' : ''}</span>
+                      )}
+                    </motion.button>
+                  ))}
+                </div>
+              </div>
+            </ScrollReveal>
+          )}
 
           {/* Search & Filter Bar */}
           <ScrollReveal delay={0.1} direction="up">
