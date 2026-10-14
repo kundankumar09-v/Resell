@@ -17,6 +17,7 @@ vi.mock('../../services/services', () => ({
   },
   categoryService: {
     list: vi.fn().mockResolvedValue({ data: { categories: [] } }),
+    stats: vi.fn().mockResolvedValue({ data: { stats: [] } }),
   },
   favoriteService: {
     check: vi.fn().mockResolvedValue({ data: { favorited: false } }),
