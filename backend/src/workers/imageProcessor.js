@@ -12,7 +12,10 @@ const { extractColorHistogram, downloadImageBuffer } = require('../services/imag
 const cvProvider = createCVProvider();
 const { calculateRecommendedPrice } = require('../services/priceRecommendation');
 const { detectRisk, fuseFraudScores } = require('../services/fraudDetection');
-const { assessCategoryAgreement } = require('../services/fraudDetection');
+const {
+  assessCategoryAgreement,
+  assessCrossCategoryImageRepost,
+} = require('../services/fraudDetection');
 const { cosineSimilarity } = require('../services/textSimilarity');
 
 (async () => {
@@ -482,6 +485,19 @@ const { cosineSimilarity } = require('../services/textSimilarity');
         }
       });
 
+      // Cross-category CLIP image-repost scan (README §7.11): platform-wide and
+      // cross-seller. Requires a 512-D CLIP embedding — skipped silently when
+      // the ML service is down. detectRisk suppresses it when pHash already
+      // fired so it can never exceed the pHash duplicate weight.
+      let crossCategoryRepost = null;
+      if (clipEmbedding.length === 512) {
+        crossCategoryRepost = await assessCrossCategoryImageRepost({
+          productId: product._id,
+          embedding: clipEmbedding,
+          sellerId: product.seller?._id || product.seller,
+        });
+      }
+
       try {
         const risk = await detectRisk({
           product,
@@ -490,6 +506,7 @@ const { cosineSimilarity } = require('../services/textSimilarity');
           imageTextSimilarity,
           categoryMismatch: categoryAgreement.mismatch,
           additionalScanCategories,
+          crossCategoryRepost,
         });
 
         // v1/v2 score fusion (README §8.4): when the ML service returned a

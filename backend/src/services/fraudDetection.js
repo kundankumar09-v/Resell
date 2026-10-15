@@ -26,6 +26,7 @@ const { hammingDistance } = require('./imageHash');
 const { analyzeTextScam } = require('./textScamAnalyzer');
 const { charNgramJaccard, cosineSimilarity, normalizeText } = require('./textSimilarity');
 const mlClient = require('./mlClient');
+const { searchVectorNearestNeighbors } = require('./vectorSearch');
 const {
   buildProductFingerprint,
   compareProductFingerprints,
@@ -104,6 +105,20 @@ const CATEGORY_MISMATCH_SIGNAL = 'CATEGORY_MISMATCH';
 const CATEGORY_MISMATCH_FACTOR =
   'Listing category disagrees with the category detected in the image (AI classification) — supporting evidence';
 
+// ── Cross-category CLIP image repost ────────────────────────────────────────
+// Platform-wide, cross-seller CLIP vector scan (vectorSearch.js) that catches
+// the same photo re-posted under a DIFFERENT category, where the
+// category-scoped pHash gate cannot see it. Supporting-only and explicitly
+// subordinate to the pHash duplicate signal: it is suppressed whenever pHash
+// already fired, so it can never push a listing above the pHash duplicate
+// weight. Skipped silently when the ML service is down (no embedding).
+const CROSS_CATEGORY_SIM_THRESHOLD = envNum('CROSS_CATEGORY_SIM_THRESHOLD', 0.93);
+const CROSS_CATEGORY_SCAN_K = envNum('CROSS_CATEGORY_SCAN_K', 50);
+const CROSS_CATEGORY_IMAGE_REPOST_WEIGHT = 20;
+const CROSS_CATEGORY_IMAGE_REPOST_SIGNAL = 'CROSS_CATEGORY_IMAGE_REPOST';
+const CROSS_CATEGORY_IMAGE_REPOST_FACTOR =
+  "CROSS_CATEGORY_IMAGE_REPOST: platform-wide image match to another seller's listing in another category — supporting evidence";
+
 // Generalized risk categories exposed to non-admin surfaces. The detailed
 // factor strings expose internal thresholds (e.g. "<15% of original price");
 // buyers/sellers only see these coarse categories, while admins see the full
@@ -121,7 +136,9 @@ const RISK_FACTOR_CATEGORIES = [
 
 const mapFactorToCategory = (factor) => {
   const f = String(factor || '');
-  if (/duplicate image|visual product similarity/i.test(f)) return 'possible_duplicate_image';
+  if (/duplicate image|visual product similarity|cross_category_image_repost/i.test(f)) {
+    return 'possible_duplicate_image';
+  }
   if (/image-text mismatch|does not match its title|category mismatch|category disagreement|category disagrees/i.test(f)) {
     return CONTENT_MISMATCH_CATEGORY;
   }
@@ -394,6 +411,53 @@ const assessCategoryAgreement = ({ predictedCategory, confidence, chosenCategory
   return { mismatch: true, reason: 'mismatch' };
 };
 
+/**
+ * Platform-wide CLIP nearest-neighbour scan for a cross-seller image repost.
+ * Requires a 512-D embedding (skips silently when the ML service is down or
+ * the embedding is missing). Only cross-seller hits count; the best hit at or
+ * above CROSS_CATEGORY_SIM_THRESHOLD raises CROSS_CATEGORY_IMAGE_REPOST.
+ * detectRisk suppresses it when the pHash duplicate gate already fired.
+ */
+const assessCrossCategoryImageRepost = async ({ productId, embedding, sellerId } = {}) => {
+  if (!Array.isArray(embedding) || embedding.length === 0) {
+    return { available: false, signal: null, reason: 'embedding_unavailable' };
+  }
+
+  let neighbours = [];
+  try {
+    neighbours = await searchVectorNearestNeighbors(embedding, {
+      limit: CROSS_CATEGORY_SCAN_K,
+      status: 'active',
+      excludeId: productId || null,
+      crossCategory: true,
+    });
+  } catch (err) {
+    return { available: false, signal: null, reason: 'vector_search_unavailable' };
+  }
+
+  const seller = sellerId ? sellerId.toString() : null;
+  let best = null;
+  for (const candidate of neighbours || []) {
+    const candidateSeller =
+      candidate?.seller?._id?.toString?.() || candidate?.seller?.toString?.() || null;
+    if (seller && candidateSeller && candidateSeller === seller) continue;
+    if (!Number.isFinite(candidate?.score)) continue;
+    if (!best || candidate.score > best.score) best = candidate;
+  }
+
+  if (!best || best.score < CROSS_CATEGORY_SIM_THRESHOLD) {
+    return { available: true, signal: null, similarity: best ? best.score : null };
+  }
+
+  return {
+    available: true,
+    signal: CROSS_CATEGORY_IMAGE_REPOST_SIGNAL,
+    similarity: best.score,
+    similarTo: best._id,
+    similarToTitle: best.title,
+  };
+};
+
 const detectRisk = async ({
   product,
   hashes = [],
@@ -404,6 +468,7 @@ const detectRisk = async ({
   imageTextSimilarity = null,
   categoryMismatch = false,
   additionalScanCategories = [],
+  crossCategoryRepost = null,
 }) => {
   const factors = [];
   let riskScore = 0;
@@ -421,6 +486,10 @@ const detectRisk = async ({
   //    (callers that pass bare aiAnalysis keep the old probe set).
   const collectedHashes = collectHashSet(aiAnalysis);
   const probeHashes = collectedHashes.length > 0 ? collectedHashes : hashes;
+  // Tracks whether the pHash duplicate gate fired — used to suppress the
+  // subordinate cross-category CLIP repost signal so it can never push a
+  // listing above the pHash duplicate weight.
+  let phashDuplicateFound = false;
   if (probeHashes.length > 0 && !sameOwnerRelist) {
     const candidateFilter = {
       _id: { $ne: product._id },
@@ -486,6 +555,7 @@ const detectRisk = async ({
               `Duplicate image detected (~${similarityPct}% similar to listing "${candidate.title}", distance: ${distance})`
             );
             duplicateFound = true;
+            phashDuplicateFound = true;
             break;
           }
         }
@@ -652,6 +722,24 @@ const detectRisk = async ({
   if (categoryMismatch) {
     riskScore += CATEGORY_MISMATCH_WEIGHT;
     factors.push(CATEGORY_MISMATCH_FACTOR);
+  }
+
+  // 11. Cross-category CLIP image repost (supporting-only, subordinate to
+  //     pHash — never exceeds the +35 duplicate weight).
+  if (
+    crossCategoryRepost &&
+    crossCategoryRepost.signal === CROSS_CATEGORY_IMAGE_REPOST_SIGNAL &&
+    !phashDuplicateFound
+  ) {
+    riskScore += CROSS_CATEGORY_IMAGE_REPOST_WEIGHT;
+    if (crossCategoryRepost.similarToTitle) {
+      const pct = Math.round((crossCategoryRepost.similarity || 0) * 100);
+      factors.push(
+        `CROSS_CATEGORY_IMAGE_REPOST: platform-wide image match (~${pct}%) to another seller's listing "${crossCategoryRepost.similarToTitle}" in a different category — supporting evidence`
+      );
+    } else {
+      factors.push(CROSS_CATEGORY_IMAGE_REPOST_FACTOR);
+    }
   }
 
   riskScore = clamp(riskScore, 0, 100);
@@ -862,4 +950,9 @@ module.exports = {
   CATEGORY_MISMATCH_WEIGHT,
   CATEGORY_MISMATCH_MIN_CONFIDENCE,
   assessCategoryAgreement,
+  CROSS_CATEGORY_IMAGE_REPOST_SIGNAL,
+  CROSS_CATEGORY_IMAGE_REPOST_WEIGHT,
+  CROSS_CATEGORY_SIM_THRESHOLD,
+  CROSS_CATEGORY_SCAN_K,
+  assessCrossCategoryImageRepost,
 };

@@ -56,10 +56,19 @@ function cosineSimilarity(vecA, vecB) {
 /**
  * Search nearest neighbors by vector embedding
  * @param {Array<Number>} queryVector - 512-D float array
- * @param {Object} options - { limit, category, status, excludeId }
+ * @param {Object} options - { limit, category, status, excludeId, crossCategory }
+ *   crossCategory: ignore `category` and search platform-wide (used by the
+ *   cross-category CLIP image-repost scan in fraudDetection.js).
  */
 async function searchVectorNearestNeighbors(queryVector, options = {}) {
-  const { limit = 10, category = null, status = 'active', excludeId = null } = options;
+  const {
+    limit = 10,
+    category = null,
+    status = 'active',
+    excludeId = null,
+    crossCategory = false,
+  } = options;
+  const useCategory = !crossCategory && !!category;
 
   if (!Array.isArray(queryVector) || queryVector.length === 0) {
     return [];
@@ -76,7 +85,7 @@ async function searchVectorNearestNeighbors(queryVector, options = {}) {
           numCandidates: limit * 10,
           limit,
           filter: {
-            ...(category ? { category: { $eq: category } } : {}),
+            ...(useCategory ? { category: { $eq: category } } : {}),
             ...(status ? { status: { $eq: status } } : {}),
           },
         },
@@ -115,7 +124,7 @@ async function searchVectorNearestNeighbors(queryVector, options = {}) {
     embedding: { $exists: true, $ne: [] },
   };
   if (status) filter.status = status;
-  if (category) filter.category = category;
+  if (useCategory) filter.category = category;
   if (excludeId) filter._id = { $ne: excludeId };
 
   const candidates = await Product.find(filter)
