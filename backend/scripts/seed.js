@@ -268,10 +268,12 @@ const PRODUCTS = [
 ];
 
 // ── DEMO DUPLICATE DETECTION LISTINGS ─────────────────────────────────────────
-// These are 6 extra listings that cover all 4 fraud-detection cases.
+// These are 7 extra listings that cover fraud-detection cases 2–5.
 // See Task 2 — each description includes one line explaining what it demonstrates.
 // Case 1 (exact pHash duplicate) uses products[0] & products[1] above (iphone-13-midnight.jpg shared).
-// Cases 2, 3, 4 are added below.
+// Cases 2, 3, 4 (image/identity signals) and Case 5 (scam-text pattern signals)
+// are added below. Case 6 (listing-velocity burst) is optional — see
+// BURST_PRODUCTS and the --with-burst flag.
 
 const DEMO_PRODUCTS = [
   // CASE 2A — re-photographed variant: 5% crop + brightness 1.1 + JPEG q70 applied by Sharp at seed time.
@@ -356,6 +358,111 @@ const DEMO_PRODUCTS = [
     description:
       '[DEMO CASE 4] Mirror-flipped (horizontally) version of the CASE 1 iPhone image — demonstrates that mirrorPerceptualHash detects the flop() evasion: the stored mirrorHash of Case 1 matches the pHash of this listing.',
     specs: [{ key: 'DEMO', value: 'Case 4 — mirror-hash detection' }],
+  },
+  // CASE 5 — scam-text template: off-platform contact + urgency clichés. The
+  // description is a keyword/regex demo, NOT a trained model (see README §7.10).
+  // Expected text-scam signals (capped at +25 total):
+  //   SUSPICIOUS_CONTACT_INFO (phone + email + WhatsApp) +10
+  //   URGENCY_PRESSURE_PHRASES (>=4 clichés) +15
+  //   EXCESSIVE_PUNCTUATION (>5 exclamation marks) +5
+  //   LOWBALL_URGENCY_COMBO ("urgent" + price < 40% of original) +15
+  // Served from a distinct re-photographed image so no pHash duplicate fires.
+  {
+    title: '[DEMO] iPhone 13 Pro — CASE 5 URGENT SALE!!!',
+    category: 'Mobile Phones',
+    seller: 'meera',
+    price: 4000,
+    originalPrice: 12000,
+    brand: 'Apple',
+    model: 'iPhone 13 Pro',
+    condition: 'fair',
+    yearsUsed: 2,
+    image: 'dumbbells-pair.jpg',
+    imageTransform: 'rephotograph',
+    description:
+      "[DEMO CASE 5] URGENT SALE need cash today!!! Moving abroad next week, this is the last date. Advance payment only — don't miss this, guaranteed lowest price, trust me!!! WhatsApp me on 9876543210 or email quickcash@example.com to pay advance. Calling is fine too: 9876543210.",
+    specs: [{ key: 'DEMO', value: 'Case 5 — scam-text pattern signals' }],
+  },
+];
+
+// ── OPTIONAL: LISTING-VELOCITY (BURST) DEMO — CASE 6 ─────────────────────────
+// Created only with `--with-burst`. Five rapid listings from arjun's five-day-old
+// account push his last-24h listing count to >= 5, so the listing-velocity
+// signal (LISTING_BURST_NEW_ACCOUNT, +15) fires. The default seed deliberately
+// stays below the threshold (arjun has 4 other listings, not 5) so a plain
+// `node scripts/seed.js` shows no velocity signal. The burst listings live in
+// "Toys & Games" (no other listings) with distinct images, so no pHash
+// duplicate fires — the velocity signal is the only thing demonstrated.
+const BURST_PRODUCTS = [
+  {
+    title: '[DEMO] CASE 6 Burst Listing 1 — Wooden Puzzle Set',
+    category: 'Toys & Games',
+    seller: 'arjun',
+    price: 18,
+    originalPrice: 40,
+    brand: 'Melissa & Doug',
+    condition: 'good',
+    yearsUsed: 1,
+    image: 'desk-lamp-led.jpg',
+    description:
+      'Fifty-piece wooden puzzle set for toddlers in an animal theme. Every piece is present and the box only shows light shelf wear.',
+    specs: [{ key: 'DEMO', value: 'Case 6 — listing-velocity burst' }],
+  },
+  {
+    title: '[DEMO] CASE 6 Burst Listing 2 — Magnetic Building Tiles',
+    category: 'Toys & Games',
+    seller: 'arjun',
+    price: 26,
+    originalPrice: 55,
+    brand: 'Magna-Tiles',
+    condition: 'like-new',
+    yearsUsed: 1,
+    image: 'office-chair-mesh.jpg',
+    description:
+      'Set of one hundred translucent magnetic building tiles. Cleaned and boxed, no missing magnets or cracked corners.',
+    specs: [{ key: 'DEMO', value: 'Case 6 — listing-velocity burst' }],
+  },
+  {
+    title: '[DEMO] CASE 6 Burst Listing 3 — Remote Control Car',
+    category: 'Toys & Games',
+    seller: 'arjun',
+    price: 34,
+    originalPrice: 70,
+    brand: 'Traxxas',
+    condition: 'good',
+    yearsUsed: 2,
+    image: 'dumbbells-pair.jpg',
+    description:
+      'Hobby-grade remote control buggy with a spare battery pack. Runs smoothly; the shell has minor scuffs from outdoor use.',
+    specs: [{ key: 'DEMO', value: 'Case 6 — listing-velocity burst' }],
+  },
+  {
+    title: '[DEMO] CASE 6 Burst Listing 4 — Board Game Bundle',
+    category: 'Toys & Games',
+    seller: 'arjun',
+    price: 40,
+    originalPrice: 85,
+    brand: 'Asmodee',
+    condition: 'good',
+    yearsUsed: 2,
+    image: 'harry-potter-books.jpg',
+    description:
+      'Bundle of three family strategy board games with all cards and tokens counted and complete. Rulebooks included.',
+    specs: [{ key: 'DEMO', value: 'Case 6 — listing-velocity burst' }],
+  },
+  {
+    title: '[DEMO] CASE 6 Burst Listing 5 — Plush Teddy Collection',
+    category: 'Toys & Games',
+    seller: 'arjun',
+    price: 22,
+    originalPrice: 50,
+    brand: 'Gund',
+    condition: 'like-new',
+    yearsUsed: 0,
+    image: 'sony-wh1000xm4.jpg',
+    description:
+      'Collection of four soft plush teddy bears in assorted sizes. Washed, odour-free, and stored in a smoke-free home.',
+    specs: [{ key: 'DEMO', value: 'Case 6 — listing-velocity burst' }],
   },
 ];
 
@@ -542,7 +649,10 @@ const seed = async () => {
   const imageCache = {};
   const getCacheKey = (filename, transform) => filename + (transform ? ':' + transform : '');
 
-  const allTemplates = [...PRODUCTS, ...DEMO_PRODUCTS];
+  const withBurst = process.argv.includes('--with-burst');
+  const allTemplates = withBurst
+    ? [...PRODUCTS, ...DEMO_PRODUCTS, ...BURST_PRODUCTS]
+    : [...PRODUCTS, ...DEMO_PRODUCTS];
   for (const tpl of allTemplates) {
     const key = getCacheKey(tpl.image, tpl.imageTransform);
     if (!imageCache[key]) {
@@ -609,7 +719,33 @@ const seed = async () => {
     const product = await Product.create(doc);
     demoProducts.push(product);
   }
-  console.log(`[Seed] DEMO products created (${demoProducts.length}) — cases 2, 3, 4`);
+  console.log(`[Seed] DEMO products created (${demoProducts.length}) — cases 2, 3, 4, 5`);
+
+  // OPTIONAL Case 6 — listing-velocity burst (only with --with-burst).
+  const burstProducts = [];
+  if (withBurst) {
+    for (let i = 0; i < BURST_PRODUCTS.length; i++) {
+      const tpl = BURST_PRODUCTS[i];
+      const key = getCacheKey(tpl.image, tpl.imageTransform);
+      const buffer = imageCache[key];
+      const hash = await perceptualHashFromBuffer(buffer);
+      const mirrorHash = await mirrorPerceptualHashFromBuffer(buffer);
+      const doc = buildProductDoc(
+        tpl,
+        usersByName[tpl.seller]._id,
+        categoriesByName[tpl.category]._id,
+        { url: `${BASE_URL}/public/seed-images/${tpl.image}` },
+        hash,
+        mirrorHash,
+        new Date(now - (i + 1) * 60 * 1000) // within the last few minutes
+      );
+      const product = await Product.create(doc);
+      burstProducts.push(product);
+    }
+    console.log(
+      `[Seed] BURST demo products created (${burstProducts.length}) — CASE 6 (listing velocity)`
+    );
+  }
 
   // ── Sales (for priya trust score) ─────────────────────────────────────────
   const sales = [];
@@ -716,7 +852,7 @@ const seed = async () => {
 
   // ── Run detectRisk on all demo listings ────────────────────────────────────
   console.log('\n[Seed] Running detectRisk on duplicate-demo listings...');
-  const allDemoAndDup = [dupListing, ...demoProducts];
+  const allDemoAndDup = [dupListing, ...demoProducts, ...burstProducts];
   const riskTable = [];
 
   for (const listing of allDemoAndDup) {
@@ -734,6 +870,9 @@ const seed = async () => {
             riskScore: risk.riskScore,
             riskLevel: risk.riskLevel,
             factors: risk.factors,
+            riskFactorCategories: risk.riskFactorCategories,
+            v1RiskScore: risk.riskScore,
+            fusionMode: 'v1',
             assessedAt: new Date(),
           },
         },

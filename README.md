@@ -713,6 +713,11 @@ All signals are aggregated into a single score by the `detectRisk()` function:
 | Same description as another active listing (exact match — fast path) | +20 |
 | Near-duplicate description, **same seller** (ML cosine >= 0.92, else 3-gram Jaccard >= 0.85) | +20 |
 | Near-duplicate description, **different seller**, same category (same thresholds) | +15 |
+| Image–title mismatch (CLIP image↔title cosine < 0.20, strong band only — ML required) | +15 |
+| Category mismatch (MobileNet predicted vs chosen, confidence >= 0.5) | +10 |
+| Cross-category image repost (CLIP cosine >= 0.93, cross-seller, pHash did **not** fire) | +20 |
+| Listing burst: >= 5 listings in 24h from an account < 7 days old | +15 |
+| Listing burst: >= 10 listings in 24h (any account) | +10 |
 | Scam-text patterns (lexical heuristics, capped — see §7.10) | +25 max |
 | Seller has > 3 reports against them | +15 |
 | AI damage score >= 50 | +5 |
@@ -727,6 +732,13 @@ Risk level: < 25 -> low | 25-49 -> medium | >= 50 -> high
 The score and `factors[]` array are stored in `product.aiAnalysis.riskAssessment.riskScore` and `product.aiAnalysis.riskAssessment.factors` (schema in section 11) and displayed prominently in the product detail page.
 
 **Near-duplicate descriptions.** The exact-match row above is a fast path: if an identical description already exists on one of the seller's active listings the similarity scan is skipped entirely. Otherwise `detectRisk()` compares the description against the seller's other active listings (cap `DESC_DUP_SCAN_CAP`, default 100) and, if nothing matches, against other sellers' active listings in the same category (cap `OTHER_SELLER_DESC_SCAN_CAP`, default 200). Similarity is CLIP text embeddings via `POST /text-embed` (cosine, threshold 0.92) when the ML service is reachable, otherwise a pure-JS character 3-gram Jaccard score (threshold 0.85); text is lowercased and whitespace-collapsed first. This catches the "same listing, two words changed" evasion. **Honest labeling:** the fallback is a lexical overlap measure and the embedding path is a frozen general-purpose encoder — neither is a fraud-specific model, and a full rephrase evades both.
+
+**Content-mismatch, cross-category, and velocity signals.** Four further signals feed the same score, all supporting-only:
+
+- **Image–title mismatch.** After CLIP image embedding, the worker compares the image embedding with the CLIP *text* embedding of the title (`POST /text-embed`). Only the **strong** band (cosine `< 0.20`) fires (`IMAGE_TEXT_MISMATCH`, **+15**); the weak band `0.20–0.30` adds nothing and is logged for shadow analysis. Short or purely generic titles ("laptop for sale") are skipped, and a missing ML service skips silently.
+- **Category mismatch.** The worker compares MobileNet's predicted category with the seller's chosen category; a confident disagreement (`confidence >= 0.5`) fires (`CATEGORY_MISMATCH`, **+10**) and also widens the pHash probe to the suggested category (scan routing — §7.11).
+- **Cross-category image repost.** A platform-wide, cross-seller CLIP vector scan (`CROSS_CATEGORY_SIM_THRESHOLD = 0.93`, top `CROSS_CATEGORY_SCAN_K = 50`) catches the same photo filed under a *different* category (`CROSS_CATEGORY_IMAGE_REPOST`, **+20**). It is suppressed whenever the pHash duplicate gate already fired, so it can never exceed the +35 duplicate weight.
+- **Listing velocity.** A single indexed count of the seller's listings in the last 24h. `>= 5` listings from an account younger than 7 days fires `LISTING_BURST_NEW_ACCOUNT` (**+15**); `>= 10` listings from any account fires `LISTING_BURST` (**+10**). This signal is **behavioral**, **capped**, and **combinable**: the two thresholds never stack (the larger weight wins) and it is independent of listing content, so it adds on top of the content signals above.
 
 ### 7.10 Scam-Text Pattern Analyzer
 
@@ -746,11 +758,13 @@ The last rule is an *interaction* signal: neither urgency nor a low price is sus
 
 **Limitations / roadmap:** every rule is trivially evaded by synonyms, spacing, or leetspeak. Once labeled scam text exists, replace/augment this with an embedding-based classifier via the ML service (`POST /text-embed`) or a supervised text model. Do not treat the current signals as a trained detector.
 
+**Note on behavioural signals.** This analyzer looks only at *content* (title/description). The **behavioral** listing-velocity signals (`LISTING_BURST_NEW_ACCOUNT` / `LISTING_BURST`) are computed separately inside `detectRisk()` from the seller's 24h listing count, are **capped** (the two thresholds never stack — the larger weight wins), and are **combinable** with the content signals (§7.9).
+
 ### 7.11 Duplicate Detection — Complete Flow
 
 #### Purpose
 
-The duplicate-detection subsystem exists to prevent image reuse and near-duplicate listings before they propagate. The design goal is **multi-layer defense**: a cheap perceptual-hash gate blocks exact/reposted copies early, a visual CNN fingerprint covers same-product appearance under viewpoint/lighting changes, text near-duplicate detection blocks the "two words changed" evasion, and all signals converge in the unified risk engine (`detectRisk()` in `backend/src/services/fraudDetection.js`). Final outputs are stored in `product.aiAnalysis` (see §11).
+The duplicate-detection subsystem exists to prevent image reuse and near-duplicate listings before they propagate. The design goal is **multi-layer defense**: a cheap perceptual-hash gate blocks exact/reposted copies early, a visual CNN fingerprint covers same-product appearance under viewpoint/lighting changes, text near-duplicate detection blocks the "two words changed" evasion, and all signals converge in the unified risk engine (`detectRisk()` in `backend/src/services/fraudDetection.js`). Final outputs are stored in `product.aiAnalysis` (see §11). When the worker detects a confident category mismatch, it also **widens the pHash probe to the suggested category's listings** (cross-category scan routing), so a repost filed under the wrong category cannot scope the duplicate check away.
 
 #### End-to-End Flow (ASCII)
 
@@ -787,6 +801,24 @@ Description check (exact fast-path first, then near-duplicate)
   - scam-text lexical analyzer -> +0 to +25 (capped, §7.10)
     |
     v
+Image-text + category agreement (worker; requires ML embeddings)
+  - CLIP image<->title cosine < 0.20 (strong band) -> IMAGE_TEXT_MISMATCH (+15)
+      (weak band 0.20-0.30 -> +0, shadow-logged; generic/short titles skipped)
+  - MobileNet predicted != chosen, confidence >= 0.5 -> CATEGORY_MISMATCH (+10)
+      (also widens the pHash probe to the suggested category)
+    |
+    v
+Platform-wide CLIP vector scan (worker; cross-seller, any category)
+  - top-K CROSS_CATEGORY_SCAN_K = 50, crossCategory = true
+  - cosine >= CROSS_CATEGORY_SIM_THRESHOLD = 0.93 AND pHash did NOT fire
+      -> CROSS_CATEGORY_IMAGE_REPOST (+20)
+    |
+    v
+Listing velocity (behavioral; single indexed 24h count)
+  - >= 5 in 24h from an account < 7 days old -> +15
+  - >= 10 in 24h from any account -> +10 (never stacked; larger weight wins)
+    |
+    v
 Aggregate + v1/v2 fusion
   - v1 only -> fusionMode "v1"
   - v2 only -> fusionMode "v2"
@@ -808,6 +840,10 @@ Stored in aiAnalysis.riskAssessment (+ imageHashes / rotationHashes / vflipHash)
 | Same listing text, word-for-word | Description copied verbatim | Text exact-match fast path | `DUPLICATE_DESCRIPTION` (+20) | Yes — fast path skips the similarity scan entirely. |
 | Near-duplicate description, same seller | "iPhone 15 Pro, 256GB" -> "iPhone 15 Pro - 256 GB" | Text near-duplicate (ML cosine / 3-gram Jaccard) | `DUPLICATE_DESCRIPTION` (+20) (cap 100) | Yes — CLIP cosine >= 0.92, else 3-gram Jaccard >= 0.85; text lowercased + whitespace-collapsed first. |
 | Near-duplicate description, other seller (same category) | Same boilerplate reused across sellers | Cross-seller text near-duplicate | `DUPLICATE_DESCRIPTION` (+15) (cap 200) | Yes — same thresholds, same-category scope only. |
+| Off-topic photo (title/photo mismatch) | Titled "iPhone 15 Pro" but the photo shows an unrelated item | CLIP image↔title (worker) | `IMAGE_TEXT_MISMATCH` (+15) | Yes — strong band only (< 0.20); generic/short titles skipped; skipped when ML down (unit tests). |
+| Category disagreement | Listing filed under the wrong category | MobileNet classification (worker) | `CATEGORY_MISMATCH` (+10) | Partial — fires only at MobileNet confidence >= 0.5; also widens the pHash probe to the suggested category. |
+| Same photo re-posted under another category | Stolen image moved to a different category to dodge the same-category pHash gate | Platform-wide CLIP vector scan (worker) | `CROSS_CATEGORY_IMAGE_REPOST` (+20) | Partial — cross-seller top-K scan, crossCategory = true; suppressed when pHash fired; skipped when ML down (unit tests, vectorSearch mocked). |
+| Burst-spamming from a fresh account | Many listings published within 24h | Listing velocity (indexed 24h count) | `LISTING_BURST_NEW_ACCOUNT` (+15, age < 7d) / `LISTING_BURST` (+10) | Yes — thresholds never stack (larger wins); behavioral and capped (unit tests). |
 
 #### Design Guarantees
 
@@ -831,15 +867,16 @@ Numbers below are from `backend/scripts/phash_validation_results.md` (validated 
 
 #### How to See It Live
 
-`backend/scripts/seed.js` seeds a demo set covering all five cases and then **runs the real `detectRisk()`** over them and prints a "Risk Assessment Table" — no risk value is hard-coded in the seed data:
+`backend/scripts/seed.js` seeds a demo set covering five baseline cases (plus an optional sixth behavioural case via `--with-burst`) and then **runs the real `detectRisk()`** over them and prints a "Risk Assessment Table" — no risk value is hard-coded in the seed data:
 
 - **Case 1 — exact duplicate image.** Two listings share the same `iphone-13-midnight.jpg`; the pHash probe fires `DUPLICATE_IMAGE` (**+35**), so the duplicate listing lands at roughly **risk 35** — the canonical reference for how the flow looks.
 - **Case 2 — re-photographed variant.** The same product photographed differently (5% crop + brightness/JPEG change applied at seed time): shows that CNN/CLIP visual similarity is a *supporting* signal only.
 - **Case 3 — legitimate same-category sellers.** Distinct photos/brands in the same category: expected **zero** duplicate signals — proof the pipeline does not penalise honest sellers.
 - **Case 4 — mirror-flipped repost.** A horizontally flipped copy of the Case 1 image, which the mirror hash catches.
 - **Case 5 — scam-text template.** Off-platform contact + urgency clichés exercise the scam-text signals (§7.10) served from a distinct image.
+- **Case 6 — listing burst (`--with-burst`, `[DEMO]`).** Five rapid listings from a demo account younger than 7 days exercise the behavioral `LISTING_BURST_NEW_ACCOUNT` (**+15**) signal (§7.9). Omitted from the default run so the baseline seed stays clean.
 
-So a single `node scripts/seed.js` run demonstrates the pHash, mirror, visual, and text layers feeding one aggregated score. (Redis/BullMQ workers need not be running: the printed scores come from `detectRisk()`; the fuller CNN/CLIP signals would require the workers and ML service up.)
+So a single `node scripts/seed.js` run demonstrates the pHash, mirror, visual, and text layers feeding one aggregated score. (Redis/BullMQ workers need not be running: the printed scores come from `detectRisk()`; the fuller CNN/CLIP signals would require the workers and ML service up.) Run `node scripts/seed.js --with-burst` to additionally demonstrate the behavioral listing-velocity layer.
 
 ---
 
@@ -1484,7 +1521,7 @@ This section is an honest inventory of the theoretical bounds the fraud/identity
 | 9 | First backend boot fetches MobileNet weights over the network | Slow (~35s) cold start; offline boot fails warm-up | Failures degrade to local heuristics; neither fraud gating nor listing creation is blocked on the model actually having loaded |
 | 10 | `RemoteMLProvider` (`cvAdapter.js`) is a stub; remote CV inference is deferred | Some CV signals fall back to local heuristics | Explicit stub warning + documented fallback path; local CNN fingerprinting remains the committed visual signal |
 | 11 | HNSW ANN nearest-neighbor lookups are approximate | k-NN results can omit true nearest neighbors | ANN used only for fast embedding retrieval; decision-critical comparisons still run the exact code path |
-| 12 | Duplicate/image scans are category-scoped | Cross-category duplicates fall outside the candidate window | Deliberate trade-off for bounded latency; the bounded-scan truncation warning surfaces when the pool is exhausted rather than silently passing |
+| 12 | Duplicate/image scans are category-scoped | Cross-category duplicates fall outside the candidate window | Deliberate trade-off for bounded latency; the bounded-scan truncation warning surfaces when the pool is exhausted rather than silently passing. **Mitigations in place:** a confident category mismatch widens the pHash probe to the suggested category (§7.11 scan routing), and the **platform-wide** cross-category CLIP vector scan (top-K `CROSS_CATEGORY_SCAN_K = 50`, `CROSS_CATEGORY_IMAGE_REPOST`, +20) now covers cross-category copies of the *same image*. Platform-wide **pHash** (brute-force Hamming across all categories) remains future work |
 | 13 | Automated flagging can false-positive legitimate listings | Seller friction from a wrong flag | Self-serve appeal flow (owner-only, one pending per product) that clears the flag on approval; approval also records `disputedFactors` so the ML side learns |
 | 14 | Model feedback is driven by human decisions, which are themselves noisy and low-volume | Risk of over-fitting to a tiny, biased feedback set | Only unambiguous decisions are fed back (appeal approved = false positive; resolved product report = confirmed fraud); ml-service attaches an outcome only to an unlabelled `outcome:null` record |
 | 15 | Hash state is duplicated across storage schemas (Product vs ImageUploadRecord) | Schema drift could make mirror-hash gates and probe sets disagree | Upload-time mirror-hash duplicate gate + worker merge-preserve semantics keep the two stores consistent by construction |

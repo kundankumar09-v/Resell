@@ -119,6 +119,23 @@ const CROSS_CATEGORY_IMAGE_REPOST_SIGNAL = 'CROSS_CATEGORY_IMAGE_REPOST';
 const CROSS_CATEGORY_IMAGE_REPOST_FACTOR =
   "CROSS_CATEGORY_IMAGE_REPOST: platform-wide image match to another seller's listing in another category — supporting evidence";
 
+// ── Listing velocity (behavioral) ───────────────────────────────────────────
+// A seller publishing many listings in a short window is a classic
+// mass-spam / account-takeover pattern. Counted with a single indexed query
+// over the seller's listings in the last LISTING_VELOCITY_WINDOW_HOURS (24).
+// Behavioral and capped: the two thresholds never stack — the larger (+15)
+// wins when both would apply.
+const LISTING_VELOCITY_WINDOW_HOURS = envNum('LISTING_VELOCITY_WINDOW_HOURS', 24);
+const LISTING_BURST_NEW_ACCOUNT_MIN = envNum('LISTING_BURST_NEW_ACCOUNT_MIN', 5);
+const LISTING_BURST_MIN = envNum('LISTING_BURST_MIN', 10);
+const LISTING_BURST_NEW_ACCOUNT_MAX_AGE_DAYS = envNum('LISTING_BURST_NEW_ACCOUNT_MAX_AGE_DAYS', 7);
+const LISTING_BURST_NEW_ACCOUNT_WEIGHT = 15;
+const LISTING_BURST_WEIGHT = 10;
+const LISTING_BURST_NEW_ACCOUNT_SIGNAL = 'LISTING_BURST_NEW_ACCOUNT';
+const LISTING_BURST_SIGNAL = 'LISTING_BURST';
+const LISTING_BURST_NEW_ACCOUNT_FACTOR = `Listing burst: ${LISTING_BURST_NEW_ACCOUNT_MIN}+ listings in ${LISTING_VELOCITY_WINDOW_HOURS}h from a new account`;
+const LISTING_BURST_FACTOR = `Listing burst: ${LISTING_BURST_MIN}+ listings in ${LISTING_VELOCITY_WINDOW_HOURS}h`;
+
 // Generalized risk categories exposed to non-admin surfaces. The detailed
 // factor strings expose internal thresholds (e.g. "<15% of original price");
 // buyers/sellers only see these coarse categories, while admins see the full
@@ -146,7 +163,7 @@ const mapFactorToCategory = (factor) => {
     return 'content_scam_signals';
   }
   if (/price|suspiciously low|above original/i.test(f)) return 'pricing_anomaly';
-  if (/new account|reports against/i.test(f)) return 'account_risk';
+  if (/new account|reports against|listing burst/i.test(f)) return 'account_risk';
   if (/identifier|ownership|possession|provenance|stolen/i.test(f)) return 'identity_concern';
   if (/description|damage|quality/i.test(f)) return 'content_quality';
   return 'other';
@@ -409,6 +426,26 @@ const assessCategoryAgreement = ({ predictedCategory, confidence, chosenCategory
   }
   if (predicted === chosen) return { mismatch: false, reason: 'agreement' };
   return { mismatch: true, reason: 'mismatch' };
+};
+
+/**
+ * Resolve the seller account age in days. Prefers a populated
+ * `product.seller.createdAt` (create/update paths) and otherwise does a single
+ * indexed User lookup — the worker passes an unpopulated ObjectId, so
+ * `product.seller.createdAt` is undefined there. Returns null when the user
+ * cannot be resolved (never throws), so the caller can skip the age-gated band.
+ */
+const resolveSellerAccountAgeDays = async (product, sellerId) => {
+  if (product?.seller?.createdAt) {
+    return Math.floor((Date.now() - new Date(product.seller.createdAt)) / 86400000);
+  }
+  try {
+    const user = await User.findById(sellerId).select('createdAt').lean();
+    if (!user?.createdAt) return null;
+    return Math.floor((Date.now() - new Date(user.createdAt)) / 86400000);
+  } catch (err) {
+    return null;
+  }
 };
 
 /**
@@ -742,6 +779,34 @@ const detectRisk = async ({
     }
   }
 
+  // 12. Listing velocity (behavioral). Single indexed count over the seller's
+  //     other listings in the last LISTING_VELOCITY_WINDOW_HOURS (24). The two
+  //     thresholds never stack — the larger (+15) wins when both would apply.
+  if (product.seller) {
+    const sellerId = product.seller._id || product.seller;
+    const windowStart = new Date(
+      Date.now() - LISTING_VELOCITY_WINDOW_HOURS * 60 * 60 * 1000
+    );
+    const recentListingCount = await Product.countDocuments({
+      _id: { $ne: product._id },
+      seller: sellerId,
+      createdAt: { $gte: windowStart },
+      status: { $in: ['active', 'sold'] },
+    });
+    if (recentListingCount >= LISTING_BURST_NEW_ACCOUNT_MIN) {
+      const accountAgeDays = await resolveSellerAccountAgeDays(product, sellerId);
+      const newAccount =
+        accountAgeDays !== null && accountAgeDays < LISTING_BURST_NEW_ACCOUNT_MAX_AGE_DAYS;
+      if (newAccount) {
+        riskScore += LISTING_BURST_NEW_ACCOUNT_WEIGHT;
+        factors.push(LISTING_BURST_NEW_ACCOUNT_FACTOR);
+      } else if (recentListingCount >= LISTING_BURST_MIN) {
+        riskScore += LISTING_BURST_WEIGHT;
+        factors.push(LISTING_BURST_FACTOR);
+      }
+    }
+  }
+
   riskScore = clamp(riskScore, 0, 100);
 
   // v1 AUTHORITATIVE risk bands (backend, 0-100 additive scale):
@@ -955,4 +1020,9 @@ module.exports = {
   CROSS_CATEGORY_SIM_THRESHOLD,
   CROSS_CATEGORY_SCAN_K,
   assessCrossCategoryImageRepost,
+  LISTING_BURST_SIGNAL,
+  LISTING_BURST_NEW_ACCOUNT_SIGNAL,
+  LISTING_BURST_WEIGHT,
+  LISTING_BURST_NEW_ACCOUNT_WEIGHT,
+  resolveSellerAccountAgeDays,
 };
