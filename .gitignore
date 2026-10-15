@@ -11,3 +11,15 @@ ml-service/eval/data/
 
 # Generated demo placeholder images (created by backend/scripts/seed.js)
 backend/public/seed-images/
+
+# Local upload directory (uploads normally go to Cloudinary; kept for local dev)
+backend/public/uploads/
+
+# Editor / OS noise
+*.swp
+*.swo
+Thumbs.db
+
+# Throwaway command-output captures
+backend/*_out.txt
+backend/*_output.txt
