@@ -79,6 +79,7 @@ const updateProductValidation = [
   body('yearsUsed').optional().isInt({ min: 0 }).withMessage('Years used must be a positive integer'),
   body('specifications').optional().isArray().withMessage('Specifications must be an array'),
   body('images').optional().isArray().withMessage('Images must be an array'),
+  body('primaryObjectIndex').optional().isInt({ min: 0 }).withMessage('primaryObjectIndex must be a non-negative integer'),
   handleValidation,
 ];
 

@@ -169,6 +169,20 @@ const productSchema = new mongoose.Schema(
           cropEmbedding: { type: [Number], default: [] },
         },
       ],
+      // Cover-image pixel dimensions the detectedObjects bboxes refer to
+      // (frontend scales them to % for overlays).
+      detectedImageWidth: { type: Number, default: 0 },
+      detectedImageHeight: { type: Number, default: 0 },
+      // True when the cover image holds >= 2 detected objects. The
+      // highest-score crop (or the seller's primaryObjectIndex override)
+      // drives the listing-level suggested category.
+      multiObject: { type: Boolean, default: false },
+      // Seller-chosen primary object (PUT primaryObjectIndex). Null = default
+      // (highest detection score). Survives worker re-runs.
+      primaryObjectIndex: { type: Number, default: null, min: 0 },
+      // Informational note when >= 3 objects are detected (bundle photo).
+      // Admin/owner-only display — stripped for other viewers in getProduct.
+      bundleNote: { type: String, default: '' },
       imageHashes: [{ type: String }], // Legacy - keeping for backward compatibility
       // Rotation (90/180/270) and vertical-flip perceptual hashes extend the
       // flat imageHashes list (which carries normal + mirror entries) so

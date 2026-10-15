@@ -82,12 +82,37 @@ const validImageFeatures = (product) => {
 };
 
 /**
+ * Primary-crop embedding of a multi-object listing (README §7.12).
+ *
+ * Returns the cropEmbedding of aiAnalysis.detectedObjects[primaryObjectIndex]
+ * (defaulting to index 0, the highest detection score) when present, else
+ * null. Crop embeddings live in the local MobileNet space — comparable
+ * crop-vs-crop against other listings' crops, so a bundle photo of items
+ * A+B matches a single photo of A. Length mismatches against whole-image
+ * CLIP features are skipped cleanly by cosineSimilarity (returns null).
+ */
+const primaryCropFeatures = (product) => {
+  const objects = Array.isArray(product?.aiAnalysis?.detectedObjects)
+    ? product.aiAnalysis.detectedObjects
+    : [];
+  if (objects.length === 0) return null;
+  const rawIdx = product?.aiAnalysis?.primaryObjectIndex;
+  const idx = Number.isInteger(rawIdx) && rawIdx >= 0 && rawIdx < objects.length ? rawIdx : 0;
+  const embedding = objects[idx]?.cropEmbedding;
+  return Array.isArray(embedding) && embedding.length > 0 ? embedding : null;
+};
+
+/**
  * Build a visual product fingerprint from the CNN features produced by
  * the existing ML pipeline.
  *
  * The aggregate fingerprint is the unit-normalized mean of the per-image
- * feature vectors. Returns { available: false, reason } — never a fraud
- * signal — when CNN features are unavailable for every image.
+ * feature vectors. When the listing has multi-object detections, the
+ * primary crop's embedding is included as an extra comparison vector so a
+ * bundle photo matches a single photo of the same item crop-vs-crop.
+ *
+ * Returns { available: false, reason } — never a fraud signal — when neither
+ * whole-image CNN features nor a primary crop embedding exist.
  *
  * @param {Object} product  Product document (or plain object)
  * @returns {Object} { available, reason?, fingerprint?, imageFeatures? }
@@ -95,15 +120,23 @@ const validImageFeatures = (product) => {
 const buildProductFingerprint = (product) => {
   const imageFeatures = validImageFeatures(product);
 
-  if (imageFeatures.length === 0) {
+  const cropEmbedding = primaryCropFeatures(product);
+  if (imageFeatures.length === 0 && !cropEmbedding) {
     return { available: false, reason: 'cnn_features_unavailable' };
   }
 
-  const dims = imageFeatures[0].features.length;
+  // The aggregate mean uses whole-image features only (single embedding
+  // space). The primary crop is appended afterwards as an extra crosswise
+  // comparison vector — never mixed into the mean.
+  const dims = imageFeatures.length > 0 ? imageFeatures[0].features.length : 0;
   const sum = new Array(dims).fill(0);
   for (const { features } of imageFeatures) {
     if (features.length !== dims) continue;
     for (let i = 0; i < dims; i++) sum[i] += Number(features[i]) || 0;
+  }
+
+  if (cropEmbedding) {
+    imageFeatures.push({ url: 'crop:primary', features: cropEmbedding });
   }
 
   let norm = 0;
@@ -111,12 +144,15 @@ const buildProductFingerprint = (product) => {
   norm = Math.sqrt(norm);
 
   const fingerprint = norm > 0 ? sum.map((v) => v / norm) : [];
+  if (fingerprint.length === 0 && !cropEmbedding) {
+    return { available: false, reason: 'cnn_features_unavailable' };
+  }
 
   return {
-    available: fingerprint.length > 0,
+    available: imageFeatures.length > 0,
     ...(fingerprint.length > 0
       ? { fingerprint, imageFeatures }
-      : { reason: 'cnn_features_unavailable' }),
+      : { imageFeatures, reason: 'whole_image_features_unavailable' }),
   };
 };
 
@@ -182,4 +218,5 @@ module.exports = {
   buildProductFingerprint,
   compareProductFingerprints,
   validImageFeatures,
+  primaryCropFeatures,
 };

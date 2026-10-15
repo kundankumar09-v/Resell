@@ -96,6 +96,14 @@ export default function SellProduct() {
   const [suggestionPolling, setSuggestionPolling] = useState(false);
   const pollTimerRef = useRef(null);
   const pollCountRef = useRef(0);
+  // Multi-object state (README §7.12): bounding boxes from the worker's
+  // cover-image detection, seller-picked primary override.
+  const [multiObjects, setMultiObjects] = useState([]);
+  const [multiObjectDims, setMultiObjectDims] = useState({ w: 0, h: 0 });
+  const [isMultiObject, setIsMultiObject] = useState(false);
+  const [serverPrimaryIdx, setServerPrimaryIdx] = useState(null);
+  const [selectedPrimaryIdx, setSelectedPrimaryIdx] = useState(null);
+  const [primarySaving, setPrimarySaving] = useState(false);
 
   const currencyMeta = SUPPORTED_CURRENCIES.find((c) => c.code === selectedCurrency) || SUPPORTED_CURRENCIES.find((c) => c.code === 'INR');
   const selectedCategory = categories.find((c) => c._id === form.category);
@@ -140,6 +148,20 @@ export default function SellProduct() {
         const { data } = await productService.get(productId);
         const predicted = data.product?.aiAnalysis?.classification?.predictedCategory;
         const confidence = data.product?.aiAnalysis?.classification?.confidence;
+        const ai = data.product?.aiAnalysis || {};
+
+        // Multi-object detections (cover image): capture boxes + primary for overlays.
+        if (Array.isArray(ai.detectedObjects) && ai.detectedObjects.length > 0) {
+          setMultiObjects(ai.detectedObjects);
+          setIsMultiObject(!!ai.multiObject);
+          setMultiObjectDims({
+            w: ai.detectedImageWidth || 0,
+            h: ai.detectedImageHeight || 0,
+          });
+          const srvIdx = Number.isInteger(ai.primaryObjectIndex) ? ai.primaryObjectIndex : 0;
+          setServerPrimaryIdx(srvIdx);
+          setSelectedPrimaryIdx((prev) => (prev === null ? srvIdx : prev));
+        }
 
         if (predicted && predicted !== '') {
           // Worker has finished — find matching category
@@ -483,6 +505,36 @@ export default function SellProduct() {
     }
   };
 
+  // ── Apply primary object ───────────────────────────────────────────────────
+  // Seller clicked a bounding box: persist the override, then refresh the
+  // category suggestion (the backend re-points it at the chosen crop).
+  const applyPrimaryObject = async () => {
+    if (!createdProductId || selectedPrimaryIdx === null || selectedPrimaryIdx === serverPrimaryIdx) return;
+    setPrimarySaving(true);
+    try {
+      await productService.update(createdProductId, { primaryObjectIndex: selectedPrimaryIdx });
+      const { data } = await productService.get(createdProductId);
+      const ai = data.product?.aiAnalysis || {};
+      const predicted = ai.classification?.predictedCategory;
+      if (predicted) {
+        const matched = categories.find(
+          (c) => c.name.toLowerCase() === predicted.toLowerCase()
+        );
+        setWorkerSuggestion({
+          category: predicted,
+          confidence: ai.classification?.confidence || 0,
+          categoryId: matched?._id || null,
+        });
+      }
+      setServerPrimaryIdx(Number.isInteger(ai.primaryObjectIndex) ? ai.primaryObjectIndex : selectedPrimaryIdx);
+      toast.success('Primary item updated — AI suggestion refreshed');
+    } catch {
+      toast.error('Could not update the primary item. Please try again.');
+    } finally {
+      setPrimarySaving(false);
+    }
+  };
+
   // ── Post-submit state: show AI suggestion polling card ───────────────────────
   if (createdProductId) {
     const selectedCat = categories.find((c) => c._id === form.category);
@@ -608,6 +660,79 @@ export default function SellProduct() {
                 </motion.div>
               )}
             </AnimatePresence>
+
+            {/* Multi-object picker (README §7.12) */}
+            {isMultiObject && multiObjects.length >= 2 && (
+              <motion.div
+                key="multi-object-card"
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="card p-6 mb-6"
+                id="multi-object-picker"
+              >
+                <p className="font-semibold text-sm text-slate-800 mb-1">
+                  🤖 We found {multiObjects.length} items in your cover photo
+                </p>
+                <p className="text-xs text-slate-500 mb-4">
+                  Click the item you're selling to make it the primary — the AI category
+                  suggestion and similarity search will follow that item.
+                </p>
+                <div className="relative rounded-xl overflow-hidden border border-slate-200 inline-block max-w-full">
+                  {images[0]?.url && (
+                    <img src={images[0].url} alt="Cover with detected items" className="max-h-96 w-auto" />
+                  )}
+                  {(() => {
+                    const baseW = multiObjectDims.w || images[0]?.width || 0;
+                    const baseH = multiObjectDims.h || images[0]?.height || 0;
+                    if (!baseW || !baseH) return null;
+                    return multiObjects.map((obj, idx) => {
+                      const b = obj.bbox || {};
+                      const isPrimary = (selectedPrimaryIdx ?? serverPrimaryIdx ?? 0) === idx;
+                      const label = `${obj.label || 'Item'} ${Math.round((obj.score || 0) * 100)}%`;
+                      return (
+                        <button
+                          key={idx}
+                          type="button"
+                          onClick={() => setSelectedPrimaryIdx(idx)}
+                          aria-label={`Select ${label} as primary item`}
+                          className={cn(
+                            'absolute border-2 rounded-sm transition-all',
+                            isPrimary
+                              ? 'border-emerald-500 bg-emerald-500/10'
+                              : 'border-brand-500 bg-brand-500/10 hover:bg-brand-500/20'
+                          )}
+                          style={{
+                            left: `${((b.x || 0) / baseW) * 100}%`,
+                            top: `${((b.y || 0) / baseH) * 100}%`,
+                            width: `${((b.width || 0) / baseW) * 100}%`,
+                            height: `${((b.height || 0) / baseH) * 100}%`,
+                          }}
+                        >
+                          <span
+                            className={cn(
+                              'absolute -top-6 left-0 whitespace-nowrap text-[11px] font-semibold px-1.5 py-0.5 rounded text-white',
+                              isPrimary ? 'bg-emerald-600' : 'bg-brand-600'
+                            )}
+                          >
+                            {label}{isPrimary ? ' ✓' : ''}
+                          </span>
+                        </button>
+                      );
+                    });
+                  })()}
+                </div>
+                <div className="flex flex-wrap gap-2 mt-4">
+                  <button
+                    type="button"
+                    onClick={applyPrimaryObject}
+                    disabled={primarySaving || selectedPrimaryIdx === null || selectedPrimaryIdx === serverPrimaryIdx}
+                    className="px-4 py-2 rounded-xl bg-brand-600 hover:bg-brand-700 disabled:opacity-50 text-white text-sm font-semibold shadow-sm transition-all"
+                  >
+                    {primarySaving ? 'Saving…' : 'Set as primary item'}
+                  </button>
+                </div>
+              </motion.div>
+            )}
           </div>
         </div>
       </PageTransition>

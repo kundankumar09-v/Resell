@@ -76,12 +76,16 @@ const { cosineSimilarity } = require('../services/textSimilarity');
         // blocking — no detections or any failure yields [] and the
         // whole-image analysis above applies exactly as before.
         let detectedObjects = [];
+        let detectedImageWidth = 0;
+        let detectedImageHeight = 0;
         try {
           const multi = await analyzeDetectedObjects(buffer, {
             filename: image.originalname || 'image.jpg',
             title: productData.title,
           });
           if (Array.isArray(multi.objects)) detectedObjects = multi.objects;
+          detectedImageWidth = multi.imageWidth || 0;
+          detectedImageHeight = multi.imageHeight || 0;
         } catch (err) {
           console.warn('[Worker] Multi-object analysis warning:', err.message);
         }
@@ -95,6 +99,8 @@ const { cosineSimilarity } = require('../services/textSimilarity');
           vflipHash,
           colorHistogram,
           detectedObjects,
+          detectedImageWidth,
+          detectedImageHeight,
           analysis: {
             conditionScore: condition.score,
             damageScore: damage.score,
@@ -126,8 +132,40 @@ const { cosineSimilarity } = require('../services/textSimilarity');
           : null;
       const damageLevel =
         avgDamage === null ? null : avgDamage >= 50 ? 'high' : avgDamage >= 25 ? 'medium' : 'low';
-      const predictedCategory = results[0]?.analysis?.predictedCategory || 'Other';
-      const classificationConfidence = results[0]?.analysis?.classificationConfidence || 0;
+      // Primary product selection (README §7.12): the cover image's objects
+      // arrive sorted by detection score, so index 0 is the default primary.
+      // A seller override (PUT primaryObjectIndex) survives re-runs: it is
+      // honoured whenever it still points at a detected object.
+      const coverObjects = Array.isArray(results[0]?.detectedObjects)
+        ? results[0].detectedObjects
+        : [];
+      const multiObject = coverObjects.length >= 2;
+      const storedPrimary = await Product.findById(productId)
+        .select('aiAnalysis.primaryObjectIndex')
+        .lean();
+      const storedIndex = storedPrimary?.aiAnalysis?.primaryObjectIndex;
+      const primaryObjectIndex =
+        Number.isInteger(storedIndex) && storedIndex >= 0 && storedIndex < coverObjects.length
+          ? storedIndex
+          : 0;
+      let predictedCategory = results[0]?.analysis?.predictedCategory || 'Other';
+      let classificationConfidence = results[0]?.analysis?.classificationConfidence || 0;
+      if (multiObject) {
+        const primary = coverObjects[primaryObjectIndex];
+        if (primary && primary.cropClassification && primary.cropClassification !== 'Other') {
+          predictedCategory = primary.cropClassification;
+          classificationConfidence = primary.cropConfidence || 0;
+        }
+      }
+      // Bundle photo note (>= 3 objects): informational only, never a risk
+      // signal. Displayed to admins/owners; stripped for other viewers.
+      let bundleNote = '';
+      if (coverObjects.length >= 3) {
+        const labels = coverObjects.slice(0, 5).map((o) => o.label).join(', ');
+        bundleNote =
+          `Bundle photo: ${coverObjects.length} distinct items detected (${labels}). ` +
+          'Categorized by the primary item; review the remaining items manually.';
+      }
 
       const category = await Category.findById(productData.category);
 
@@ -384,6 +422,11 @@ const { cosineSimilarity } = require('../services/textSimilarity');
             detectedObjects: Array.isArray(results[0]?.detectedObjects)
               ? results[0].detectedObjects
               : [],
+            detectedImageWidth: results[0]?.detectedImageWidth || 0,
+            detectedImageHeight: results[0]?.detectedImageHeight || 0,
+            multiObject,
+            primaryObjectIndex: coverObjects.length > 0 ? primaryObjectIndex : null,
+            bundleNote,
             riskAssessment: {
               riskScore: mlFraud.fraudScore,
               riskLevel: mlFraud.riskLevel,

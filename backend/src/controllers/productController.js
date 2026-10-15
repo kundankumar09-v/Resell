@@ -140,9 +140,10 @@ const getProduct = async (req, res, next) => {
       Product.updateOne({ _id: product._id }, { $inc: { views: 1 } }).catch(() => {});
       // Internal fraud/moderation scores are never exposed to buyers or
       // anonymous viewers — only the owner (and admins) see the listing's
-      // own risk assessment.
+      // own risk assessment. The bundle-photo note is likewise admin/owner-only.
       if (product.aiAnalysis && req.user?.role !== 'admin') {
         product.aiAnalysis.riskAssessment = undefined;
+        product.aiAnalysis.bundleNote = undefined;
       }
     }
 
@@ -861,8 +862,35 @@ const updateProduct = async (req, res, next) => {
     ];
     // Which edits warrant an immediate re-score? Category/title/description/
     // price drive the fraud signals; other fields (brand, condition, …) do not.
+    // A primary-object change re-points the AI suggestion at the chosen crop.
     const RISK_RELEVANT_FIELDS = ['category', 'title', 'description', 'price', 'originalPrice'];
     let riskRelevantChanged = false;
+    let primaryObjectChanged = false;
+    if (req.body.primaryObjectIndex !== undefined) {
+      const idx = Number(req.body.primaryObjectIndex);
+      const objects = Array.isArray(product.aiAnalysis?.detectedObjects)
+        ? product.aiAnalysis.detectedObjects
+        : [];
+      if (!Number.isInteger(idx) || idx < 0 || idx >= objects.length) {
+        throw new AppError(
+          'Invalid primaryObjectIndex for this listing’s detected objects',
+          400,
+          'INVALID_PRIMARY_OBJECT'
+        );
+      }
+      if (!product.aiAnalysis) product.aiAnalysis = {};
+      product.aiAnalysis.primaryObjectIndex = idx;
+      // Re-point the category suggestion + fingerprint at THAT crop's
+      // embedding (README §7.12): the suggestion card, the category-agreement
+      // signal and the visual fingerprint all read the primary crop.
+      const chosen = objects[idx];
+      product.aiAnalysis.classification = {
+        predictedCategory: chosen.cropClassification || 'Other',
+        confidence: typeof chosen.cropConfidence === 'number' ? chosen.cropConfidence : 0,
+      };
+      primaryObjectChanged = true;
+      riskRelevantChanged = true;
+    }
     for (const key of allowed) {
       if (req.body[key] === undefined) continue;
       if (
@@ -887,6 +915,36 @@ const updateProduct = async (req, res, next) => {
       // reflected immediately, not only when the image worker next runs.
       if (riskRelevantChanged) {
         await rerunRiskAssessment(product);
+      }
+
+      // A primary-object change re-runs the full AI pipeline through the
+      // worker so the category suggestion and fingerprint follow the chosen
+      // crop (the worker preserves the seller's primaryObjectIndex).
+      if (primaryObjectChanged) {
+        try {
+          await imageProcessingQueue.add('analyze-product', {
+            productId: product._id.toString(),
+            images: product.images.map((img) => ({
+              url: img.url,
+              publicId: img.publicId,
+            })),
+            productData: {
+              title: product.title,
+              description: product.description,
+              price: product.price,
+              originalPrice: product.originalPrice,
+              category: product.category,
+              brand: product.brand,
+              model: product.model,
+              condition: product.condition,
+              yearsUsed: product.yearsUsed,
+              specifications: product.specifications || [],
+              location: product.location || {},
+            },
+          });
+        } catch (err) {
+          console.warn(`[Product] Could not enqueue re-analysis for ${product._id}: ${err.message}`);
+        }
       }
 
       const populated = await Product.findById(product._id)
