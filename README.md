@@ -22,6 +22,8 @@
    - [7.7 Seller Trust Score](#77-seller-trust-score)
    - [7.8 Price Recommendation Engine](#78-price-recommendation-engine)
    - [7.9 Risk Scoring — Unified Fraud Engine](#79-risk-scoring--unified-fraud-engine)
+    - [7.10 Scam-Text Pattern Analyzer](#710-scam-text-pattern-analyzer)
+    - [7.11 Duplicate Detection — Complete Flow](#711-duplicate-detection--complete-flow)
 8. [ML Microservice (Python / FastAPI)](#8-ml-microservice-python--fastapi)
    - [8.1 CLIP Embeddings](#81-clip-embeddings)
    - [8.2 LightGBM Fraud Pipeline v2](#82-lightgbm-fraud-pipeline-v2)
@@ -127,7 +129,7 @@ User uploads images
         |
         v
   imageProcessor Worker:
-    +- 1. pHash (64-bit DCT perceptual hash + mirror hash)
+    +- 1. pHash (64-bit DCT perceptual hash + 6-hash set: plain/mirror/r90/r180/r270/vflip)
     +- 2. MobileNet category classification
     +- 3. Condition scoring (brightness / contrast / edge density)
     +- 4. Damage scoring (heuristic pixel analysis)
@@ -340,9 +342,9 @@ Every image uploaded triggers a sequential analysis pipeline inside the `imagePr
 ```
 Image Upload
     |
-    +- Step 1: pHash (64-bit DCT) + mirror pHash
-    |          -> compare against all listings in same category (up to 500)
-    |          -> Hamming distance <= 12 -> +35 risk points
+    +- Step 1: pHash (64-bit DCT) + 6-hash set (plain/mirror/r90/r180/r270/vflip)
+    |          -> compare against all listings in same category (up to DUPLICATE_SCAN_CAP=500)
+    |          -> Hamming distance <= HASH_SIMILARITY_THRESHOLD=12 -> +35 risk points
     |
     +- Step 2: MobileNet classification
     |          -> top ImageNet labels -> ReSell category taxonomy
@@ -365,11 +367,17 @@ Image Upload
     +- Step 7: Identity verification (if serial/IMEI provided)
     |          -> registry lookup -> ownership signals
     |
-    +- Step 8: Visual fingerprint similarity
-    |          -> cosine similarity against up to 200 candidates
-    |          -> similarity >= 0.90 -> supporting risk signal
+    +- Step 8: Visual fingerprint similarity (CNN)
+    |          -> cosine similarity against up to VISUAL_SCAN_CAP=200 candidates
+    |          -> >= 0.90 -> +10 / >= 0.97 -> +20 (supporting-only, section 7.4)
     |
-    +- Step 9: Aggregate risk score -> product.aiAnalysis updated
+    +- Step 9: Description duplicate / scam-text signals
+    |          -> exact description match (fast path) -> +20
+    |          -> near-dup same seller (ML cosine >= 0.92 else 3-gram Jaccard >= 0.85) -> +20
+    |          -> near-dup other seller, same category -> +15
+    |          -> scam-text lexical analyzer -> up to +25 (section 7.10)
+    |
+    +- Step 10: Aggregate (v1 + v2 fusion) -> product.aiAnalysis updated
 ```
 
 ### 7.2 Perceptual Hashing (pHash)
@@ -426,6 +434,10 @@ const mirrorPerceptualHashFromBuffer = async (imageBuffer) => {
 ```
 
 Fraud check: A new upload's `[normalHash, mirrorHash]` pair is compared against every existing listing's pair. A mirrored stolen image's `normalHash` matches the original's `mirrorHash`.
+
+#### Rotation & Vertical-Flip Hashes
+
+Flipping is not the only cheap transform a reposter uses. `backend/src/services/imageHash.js` exposes `orientationHashesFromBuffer()`, which computes the **full orientation probe set** in one call — `{ rotationHashes: [r90, r180, r270], vflipHash }` alongside the plain and mirror hashes. These are persisted on the product as `aiAnalysis.rotationHashes` and `aiAnalysis.vflipHash` (see §11), and the fraud engine probes the whole set so a 90°/180°/270°-rotated or upside-down re-upload is caught just like a mirror. Validation recorded **96/96** rotation cases matched under this rotation-aware probe (see §7.11 and `backend/scripts/phash_validation_results.md`). The plain↔mirror relationship does **not** extend to rotations: a rotated copy must be hashed at the rotation, which is exactly what this probe set stores.
 
 ### 7.3 MobileNet Image Classification
 
@@ -698,7 +710,10 @@ All signals are aggregated into a single score by the `detectRisk()` function:
 | Price < 15% of original | +25 |
 | Price > 150% of original | +10 |
 | High-value listing (>5000) from account < 30 days old | +15 |
-| Same description in >= 2 other active listings | +20 |
+| Same description as another active listing (exact match — fast path) | +20 |
+| Near-duplicate description, **same seller** (ML cosine >= 0.92, else 3-gram Jaccard >= 0.85) | +20 |
+| Near-duplicate description, **different seller**, same category (same thresholds) | +15 |
+| Scam-text patterns (lexical heuristics, capped — see §7.10) | +25 max |
 | Seller has > 3 reports against them | +15 |
 | AI damage score >= 50 | +5 |
 | Identity signals (OWNERSHIP_MISMATCH, etc.) | +10 to +100 |
@@ -710,6 +725,121 @@ Risk level: < 25 -> low | 25-49 -> medium | >= 50 -> high
 ```
 
 The score and `factors[]` array are stored in `product.aiAnalysis.riskAssessment.riskScore` and `product.aiAnalysis.riskAssessment.factors` (schema in section 11) and displayed prominently in the product detail page.
+
+**Near-duplicate descriptions.** The exact-match row above is a fast path: if an identical description already exists on one of the seller's active listings the similarity scan is skipped entirely. Otherwise `detectRisk()` compares the description against the seller's other active listings (cap `DESC_DUP_SCAN_CAP`, default 100) and, if nothing matches, against other sellers' active listings in the same category (cap `OTHER_SELLER_DESC_SCAN_CAP`, default 200). Similarity is CLIP text embeddings via `POST /text-embed` (cosine, threshold 0.92) when the ML service is reachable, otherwise a pure-JS character 3-gram Jaccard score (threshold 0.85); text is lowercased and whitespace-collapsed first. This catches the "same listing, two words changed" evasion. **Honest labeling:** the fallback is a lexical overlap measure and the embedding path is a frozen general-purpose encoder — neither is a fraud-specific model, and a full rephrase evades both.
+
+### 7.10 Scam-Text Pattern Analyzer
+
+**File:** `backend/src/services/textScamAnalyzer.js`
+
+A **lexical, keyword/regex-based** analyzer (a rule engine, *not* a trained model) over `title + description`, capped at **+25** total so a suspicious description can never flag a listing on its own:
+
+| Signal | Trigger | Points |
+|---|---|---|
+| `SUSPICIOUS_CONTACT_INFO` | phone number, email address, or WhatsApp/messaging-app redirect (pay off-platform) | +10 |
+| `URGENCY_PRESSURE_PHRASES` | >= 2 / >= 4 clichés ("urgent sale", "need cash", "moving abroad", "last date", "advance payment", "trust me", …) | +10 / +15 |
+| `EXCESSIVE_CAPS` | text length > 30 and > 50% of letters uppercased | +5 |
+| `EXCESSIVE_PUNCTUATION` | more than 5 exclamation marks | +5 |
+| `LOWBALL_URGENCY_COMBO` | the word "urgent" **and** price < 40% of `originalPrice` | +15 |
+
+The last rule is an *interaction* signal: neither urgency nor a low price is suspicious alone, but an urgent sale at under 40% of MSRP is the classic "get paid fast" pattern the linear price block cannot express. Detailed factor strings are admin-only; non-admin surfaces receive the generalized `content_scam_signals` category.
+
+**Limitations / roadmap:** every rule is trivially evaded by synonyms, spacing, or leetspeak. Once labeled scam text exists, replace/augment this with an embedding-based classifier via the ML service (`POST /text-embed`) or a supervised text model. Do not treat the current signals as a trained detector.
+
+### 7.11 Duplicate Detection — Complete Flow
+
+#### Purpose
+
+The duplicate-detection subsystem exists to prevent image reuse and near-duplicate listings before they propagate. The design goal is **multi-layer defense**: a cheap perceptual-hash gate blocks exact/reposted copies early, a visual CNN fingerprint covers same-product appearance under viewpoint/lighting changes, text near-duplicate detection blocks the "two words changed" evasion, and all signals converge in the unified risk engine (`detectRisk()` in `backend/src/services/fraudDetection.js`). Final outputs are stored in `product.aiAnalysis` (see §11).
+
+#### End-to-End Flow (ASCII)
+
+```
+Upload (Cloudinary)
+    |
+    v
+Sharp preprocess (grayscale 32x32 for pHash; full-res for CV)
+    |
+    v
+Generate 6-hash set per image:
+  {plain pHash, mirror (flop) pHash, r90, r180, r270, vflip}
+    |
+    v
+pHash set-probe against existing listings in same category
+  - scan cap: DUPLICATE_SCAN_CAP = 500
+  - Hamming distance <= HASH_SIMILARITY_THRESHOLD = 12  -> match
+    |
+    v  (if match)
+Upload gate / worker emits DUPLICATE_IMAGE (+35 risk points)
+    |
+    v  (else)
+Visual CNN fingerprint scan (MobileNet embeddings)
+  - candidate cap: VISUAL_SCAN_CAP = 200
+  - mean best-match cosine >= 0.90 -> +10 ; >= 0.97 -> +20
+    |
+    v
+Description check (exact fast-path first, then near-duplicate)
+  - exact description match (fast path) -> +20
+  - near-dup same seller: ML cosine >= 0.92 else 3-gram Jaccard >= 0.85
+      (cap DESC_DUP_SCAN_CAP = 100) -> +20
+  - near-dup other seller, same category
+      (cap OTHER_SELLER_DESC_SCAN_CAP = 200) -> +15
+  - scam-text lexical analyzer -> +0 to +25 (capped, §7.10)
+    |
+    v
+Aggregate + v1/v2 fusion
+  - v1 only -> fusionMode "v1"
+  - v2 only -> fusionMode "v2"
+  - both    -> max(v1, round(v2*100)), fusionMode "v1+v2-max"
+    |
+    v
+Stored in aiAnalysis.riskAssessment (+ imageHashes / rotationHashes / vflipHash)
+```
+
+#### Detection Matrix
+
+| Fraud scenario | Example | Layer | Signal/weight | Empirically validated? |
+|---|---|---|---|---|
+| Reposted exact image | Same image copied verbatim | pHash (6-hash set probe) | `DUPLICATE_IMAGE` (+35) | Yes — 0/276 FP across different-product pairs; threshold 12 retained (`scripts/phash_validation_results.md`). |
+| Mirrored / reflipped repost | Horizontally flipped stolen image | pHash (mirror hash) | `DUPLICATE_IMAGE` (+35); plain-vs-mirror cross-match | Yes — flipped variants: mean Hamming 27.17 / min 16; mirror hash closes the class. |
+| Rotated 90/180/270 repost | Stolen image rotated to evade pHash | pHash (rotation hashes r90/r180/r270) | `DUPLICATE_IMAGE` (+35) | Yes — rotation recall 96/96; stored as `aiAnalysis.rotationHashes`. |
+| Vertical-flip (upside-down) repost | Image flipped on the vertical axis | pHash (vflip hash) | `DUPLICATE_IMAGE` (+35) | Yes — covered by the 6-hash set probe; stored as `aiAnalysis.vflipHash`. |
+| Same product, different angle / lighting / crop | Seller reuses the same physical item with new photos | CNN visual fingerprint | `VISUAL_FINGERPRINT_MEDIUM` (+10 @ >=0.90); `VISUAL_FINGERPRINT_STRONG` (+20 @ >=0.97) | Partially — cosine similarity on MobileNet embeddings; supporting-only signal (never proof alone, §7.4). |
+| Same listing text, word-for-word | Description copied verbatim | Text exact-match fast path | `DUPLICATE_DESCRIPTION` (+20) | Yes — fast path skips the similarity scan entirely. |
+| Near-duplicate description, same seller | "iPhone 15 Pro, 256GB" -> "iPhone 15 Pro - 256 GB" | Text near-duplicate (ML cosine / 3-gram Jaccard) | `DUPLICATE_DESCRIPTION` (+20) (cap 100) | Yes — CLIP cosine >= 0.92, else 3-gram Jaccard >= 0.85; text lowercased + whitespace-collapsed first. |
+| Near-duplicate description, other seller (same category) | Same boilerplate reused across sellers | Cross-seller text near-duplicate | `DUPLICATE_DESCRIPTION` (+15) (cap 200) | Yes — same thresholds, same-category scope only. |
+
+#### Design Guarantees
+
+1. **Orientation-complete hashing.** Each image contributes a 6-hash set — plain pHash, mirror (flop), r90, r180, r270, and vertical flip (`imageHash.js`) — so a repost cannot evade detection by a cheap flip or rotation. The set is persisted as `imageHashes` (plain + mirror), `rotationHashes`, and `vflipHash` (see §11).
+
+2. **Bounded scans with visible truncation.** Every layer is capped (`DUPLICATE_SCAN_CAP=500`, `VISUAL_SCAN_CAP=200`, `DESC_DUP_SCAN_CAP=100`, `OTHER_SELLER_DESC_SCAN_CAP=200`) and the fraud engine logs when the candidate pool is truncated — silent under-scanning is surfaced, not hidden (§18 item 2).
+
+3. **No single signal proves fraud.** pHash is a high-precision cheap gate; the CNN visual fingerprint is explicitly *supporting-only* (§7.4); scam-text is capped at +25 (§7.10). All signals aggregate in `detectRisk()` and, when both engines are present, fuse via `max(v1, round(v2*100))` (§8.4) — either engine may escalate, neither can downgrade, and never on a single weak signal.
+
+#### Empirical Validation Summary
+
+Numbers below are from `backend/scripts/phash_validation_results.md` (validated on a 24-image corpus: 276 different-product pairs, 120 same-item variant pairs):
+
+- **Threshold retained:** `HASH_SIMILARITY_THRESHOLD = 12` (64-bit DCT pHash) — still the single source of truth for `fraudDetection.js` and the upload/edit duplicate gate.
+- **False positives:** **0 / 276** different-product pairs at distance <= 12; the *closest* different-product pair sits at Hamming distance **16** — a 4-bit margin below the gate.
+- **Same-item recall:** **61 / 120** same-item variant pairs fall within the gate; the remainder are the deliberately "hard" transforms handed to the CNN/text layers.
+- **Rotation recall:** **96 / 96** rotation cases (90/180/270) matched under the rotation-aware probe set.
+- **Flipped images:** mean Hamming distance between an image and its horizontal flip = **27.17** (minimum **16**); the mirror hash closes this evasion path.
+
+**Honest limits of pHash.** pHash is robust to mild re-encoding, small crops, and brightness/contrast shifts, but it is **not** invariant to large crops, perspective warps, screenshots-of-screenshots, or arbitrary geometric edits — and the non-perceptual `sha256`-slice fallback used when Sharp is unavailable is invisible to pHash entirely (§18 item 3). pHash is therefore a cheap high-precision *gate*, not a complete solution: the pipeline layers CNN visual fingerprinting, description exact/near-duplicate checks, and v1/v2 fusion on top, and caps every scan so coverage loss is explicit. See **§18 Theoretical Limitations & Mitigations** for the full inventory (notably items 1–3, 11, 12, 15).
+
+#### How to See It Live
+
+`backend/scripts/seed.js` seeds a demo set covering all five cases and then **runs the real `detectRisk()`** over them and prints a "Risk Assessment Table" — no risk value is hard-coded in the seed data:
+
+- **Case 1 — exact duplicate image.** Two listings share the same `iphone-13-midnight.jpg`; the pHash probe fires `DUPLICATE_IMAGE` (**+35**), so the duplicate listing lands at roughly **risk 35** — the canonical reference for how the flow looks.
+- **Case 2 — re-photographed variant.** The same product photographed differently (5% crop + brightness/JPEG change applied at seed time): shows that CNN/CLIP visual similarity is a *supporting* signal only.
+- **Case 3 — legitimate same-category sellers.** Distinct photos/brands in the same category: expected **zero** duplicate signals — proof the pipeline does not penalise honest sellers.
+- **Case 4 — mirror-flipped repost.** A horizontally flipped copy of the Case 1 image, which the mirror hash catches.
+- **Case 5 — scam-text template.** Off-platform contact + urgency clichés exercise the scam-text signals (§7.10) served from a distinct image.
+
+So a single `node scripts/seed.js` run demonstrates the pHash, mirror, visual, and text layers feeding one aggregated score. (Redis/BullMQ workers need not be running: the printed scores come from `detectRisk()`; the fuller CNN/CLIP signals would require the workers and ML service up.)
 
 ---
 
@@ -815,6 +945,10 @@ Shadow mode enables safe model validation:
 - **Appeal approved** → `{ decided: 'false_positive', factorCategories }`; the overruled categories are also appended to `product.aiAnalysis.riskAssessment.disputedFactors` (`backend/src/controllers/appealController.js`).
 - **Product report resolved with an action** → `{ decided: 'confirmed_fraud', reportAction }` (`backend/src/controllers/reportController.js`). Dismissed reports are deliberately not fed back (reporter may simply be mistaken).
 - ml-service only attaches the outcome to a prediction record whose `outcome` is still `null`; no matching record is a silent no-op.
+
+#### v1 / v2 Score Fusion Policy
+
+`backend/src/services/fraudDetection.js` exports `fuseFraudScores()` — the single documented combination rule used by the image worker where both engines' outputs are available. When **both** the v1 additive score and the v2 calibrated probability exist, the fused score is `max(v1RiskScore, round(v2FraudProbability * 100))` with `fusionMode: "v1+v2-max"`; v1-only yields `fusionMode: "v1"` and v2-only yields `"v2"`. `max()` is deliberately conservative: either engine can escalate a listing, neither can downgrade the other, and the raw `v1RiskScore` / `v2FraudProbability` values are stored for audit (`product.aiAnalysis.riskAssessment`). Revisit as a tuned weighted fusion once the v2 pipeline has real-outcome validation.
 
 ### 8.5 ANN Index (HNSW)
 
@@ -925,9 +1059,11 @@ This is the core ML output stored on every listing:
 
 ```js
 aiAnalysis: {
-  // Image hashing
-  imageHashes: [String],        // 16-char hex pHash per image
-  mirrorHashes: [String],       // pHash of horizontally flipped image
+  // Image hashing (duplicate detection)
+  imageHashes: [String],        // flat 16-char hex pHash list — includes plain + mirror (flop) entries per image
+  rotationHashes: [String],     // r90/r180/r270 pHash of each image (orientation probe set)
+  vflipHash: [String],          // pHash of the vertically flipped image (upside-down repost probe)
+  hashesUnverified: Boolean,    // true when any stored hash came from a client echo (see §7.11)
 
   // Computer vision scores
   conditionScore: Number,       // 0-100 (100 = like-new)
@@ -941,9 +1077,13 @@ aiAnalysis: {
 
   // Fraud risk
   riskAssessment: {
-    riskScore: Number,          // 0-100 aggregated fraud risk
+    riskScore: Number,          // 0-100 aggregated fraud risk (v1, or fused v1/v2)
     riskLevel: String,          // 'low' | 'medium' | 'high'
     factors: [String],          // human-readable explanation of each signal
+    riskFactorCategories: [String], // generalized categories for non-admin surfaces
+    v1RiskScore: Number,        // raw v1 additive score (null when v1 unavailable)
+    v2FraudProbability: Number, // raw v2 calibrated probability 0-1 (null if none)
+    fusionMode: String,         // 'v1' | 'v2' | 'v1+v2-max' (see §8.4)
     assessedAt: Date,           // when the assessment was last computed
   },
 
@@ -1022,6 +1162,14 @@ HASH_SIMILARITY_THRESHOLD=12
 VISUAL_SIMILARITY_MEDIUM_THRESHOLD=0.90
 VISUAL_SIMILARITY_STRONG_THRESHOLD=0.97
 MAX_IMAGE_SIZE=5242880
+
+# ─────── Duplicate detection scan caps ───────
+# Max candidate listings probed per duplicate check (see §7.11). Truncation is
+# logged so silent under-scanning is visible.
+DUPLICATE_SCAN_CAP=500
+VISUAL_SCAN_CAP=200
+DESC_DUP_SCAN_CAP=100
+OTHER_SELLER_DESC_SCAN_CAP=200
 
 # ─────────────── Identifier Hashing ────────────
 # HMAC key for physical-product identifier hashes (serial/IMEI/VIN). Min 32
