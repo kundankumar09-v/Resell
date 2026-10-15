@@ -12,6 +12,7 @@ const { extractColorHistogram, downloadImageBuffer } = require('../services/imag
 const cvProvider = createCVProvider();
 const { calculateRecommendedPrice } = require('../services/priceRecommendation');
 const { detectRisk, fuseFraudScores } = require('../services/fraudDetection');
+const { assessCategoryAgreement } = require('../services/fraudDetection');
 const { cosineSimilarity } = require('../services/textSimilarity');
 
 (async () => {
@@ -109,6 +110,28 @@ const { cosineSimilarity } = require('../services/textSimilarity');
       const classificationConfidence = results[0]?.analysis?.classificationConfidence || 0;
 
       const category = await Category.findById(productData.category);
+
+      // Category-agreement signal (README §7.9): compare the MobileNet-predicted
+      // category to the seller's chosen category. Only a confident disagreement
+      // fires (+10); when it does, the suggested category is added to the pHash
+      // probe pool so a miscategorised repost cannot dodge the same-category
+      // gate (cross-category scan routing).
+      const categoryAgreement = assessCategoryAgreement({
+        predictedCategory,
+        confidence: classificationConfidence,
+        chosenCategoryName: category?.name,
+      });
+      let suggestedCategoryId = null;
+      if (categoryAgreement.mismatch) {
+        const escaped = String(predictedCategory).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const suggested = await Category.findOne({
+          name: { $regex: `^${escaped}$`, $options: 'i' },
+        }).select('_id');
+        suggestedCategoryId = suggested?._id || null;
+      }
+      const additionalScanCategories =
+        categoryAgreement.mismatch && suggestedCategoryId ? [suggestedCategoryId] : [];
+
       const comparables = await Product.find({
         category: productData.category,
         status: { $in: ['active', 'sold'] },
@@ -465,6 +488,8 @@ const { cosineSimilarity } = require('../services/textSimilarity');
           hashes: product.aiAnalysis.imageHashes,
           aiAnalysis: product.aiAnalysis,
           imageTextSimilarity,
+          categoryMismatch: categoryAgreement.mismatch,
+          additionalScanCategories,
         });
 
         // v1/v2 score fusion (README §8.4): when the ML service returned a

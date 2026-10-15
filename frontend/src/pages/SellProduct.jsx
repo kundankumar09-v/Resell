@@ -574,6 +574,11 @@ export default function SellProduct() {
                               {isSameAsSelected ? 'View listing →' : 'Keep my selection'}
                             </button>
                           </div>
+                          {!isSameAsSelected && workerSuggestion?.categoryId && (
+                            <p className="text-[11px] text-slate-400 mt-3" id="ai-suggestion-reanalysis-note">
+                              Applying re-runs AI analysis — the listing is re-scored with your new category.
+                            </p>
+                          )}
                         </>
                       ) : (
                         <>

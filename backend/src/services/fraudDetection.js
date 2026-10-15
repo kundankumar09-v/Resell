@@ -92,6 +92,18 @@ const GENERIC_TITLE_TERMS = new Set([
   'original', 'genuine', 'perfect', 'working', 'condition', 'fast', 'free',
 ]);
 
+// ── Category agreement (content mismatch) ───────────────────────────────────
+// MobileNet predicts a category from the photo; if it confidently disagrees
+// with the category the seller chose, the listing may be miscategorised to
+// dodge the same-category pHash/visual gates. Supporting-only: fires only at
+// confidence >= CATEGORY_MISMATCH_MIN_CONFIDENCE (0.5). When it fires the
+// worker also widens the pHash candidate pool to the suggested category.
+const CATEGORY_MISMATCH_WEIGHT = 10;
+const CATEGORY_MISMATCH_MIN_CONFIDENCE = envNum('CATEGORY_MISMATCH_MIN_CONFIDENCE', 0.5);
+const CATEGORY_MISMATCH_SIGNAL = 'CATEGORY_MISMATCH';
+const CATEGORY_MISMATCH_FACTOR =
+  'Listing category disagrees with the category detected in the image (AI classification) — supporting evidence';
+
 // Generalized risk categories exposed to non-admin surfaces. The detailed
 // factor strings expose internal thresholds (e.g. "<15% of original price");
 // buyers/sellers only see these coarse categories, while admins see the full
@@ -110,7 +122,7 @@ const RISK_FACTOR_CATEGORIES = [
 const mapFactorToCategory = (factor) => {
   const f = String(factor || '');
   if (/duplicate image|visual product similarity/i.test(f)) return 'possible_duplicate_image';
-  if (/image-text mismatch|does not match its title/i.test(f)) {
+  if (/image-text mismatch|does not match its title|category mismatch|category disagreement|category disagrees/i.test(f)) {
     return CONTENT_MISMATCH_CATEGORY;
   }
   if (/contact information in listing|urgency\/pressure language|excessive capitali|excessive punctuation|lowball price combined/i.test(f)) {
@@ -361,6 +373,27 @@ const assessImageTextMismatch = ({ imageEmbedding, textEmbedding, title } = {}) 
   return classifyImageTextMatch({ similarity, title });
 };
 
+/**
+ * Compare the worker's MobileNet-predicted category against the category the
+ * seller chose. Returns { mismatch, reason }:
+ *   category_unavailable -> no usable prediction (missing/"Other") or no chosen name
+ *   low_confidence       -> prediction below CATEGORY_MISMATCH_MIN_CONFIDENCE
+ *   agreement            -> same category (case-insensitive)
+ *   mismatch             -> confident disagreement (fires CATEGORY_MISMATCH)
+ */
+const assessCategoryAgreement = ({ predictedCategory, confidence, chosenCategoryName } = {}) => {
+  const predicted = String(predictedCategory || '').trim().toLowerCase();
+  const chosen = String(chosenCategoryName || '').trim().toLowerCase();
+  if (!predicted || predicted === 'other' || !chosen) {
+    return { mismatch: false, reason: 'category_unavailable' };
+  }
+  if (!Number.isFinite(confidence) || confidence < CATEGORY_MISMATCH_MIN_CONFIDENCE) {
+    return { mismatch: false, reason: 'low_confidence' };
+  }
+  if (predicted === chosen) return { mismatch: false, reason: 'agreement' };
+  return { mismatch: true, reason: 'mismatch' };
+};
+
 const detectRisk = async ({
   product,
   hashes = [],
@@ -369,6 +402,8 @@ const detectRisk = async ({
   visualSignals = [],
   sameOwnerRelist = false,
   imageTextSimilarity = null,
+  categoryMismatch = false,
+  additionalScanCategories = [],
 }) => {
   const factors = [];
   let riskScore = 0;
@@ -391,8 +426,25 @@ const detectRisk = async ({
       _id: { $ne: product._id },
       status: { $in: ['active', 'sold'] },
     };
-    if (product.category) {
-      candidateFilter.category = product.category;
+    // Category-scoped by default; when the worker detects a confident category
+    // mismatch it passes the suggested category here so the probe scans BOTH
+    // categories instead of letting a miscategorised repost dodge the gate.
+    const scanCategoryIds = [];
+    const seenCategoryIds = new Set();
+    for (const c of [
+      product.category,
+      ...(Array.isArray(additionalScanCategories) ? additionalScanCategories : []),
+    ]) {
+      if (!c) continue;
+      const key = c.toString();
+      if (seenCategoryIds.has(key)) continue;
+      seenCategoryIds.add(key);
+      scanCategoryIds.push(c);
+    }
+    if (scanCategoryIds.length === 1) {
+      candidateFilter.category = scanCategoryIds[0];
+    } else if (scanCategoryIds.length > 1) {
+      candidateFilter.category = { $in: scanCategoryIds };
     }
 
     // Bound the candidate pool and surface truncation so coverage gaps at
@@ -592,6 +644,14 @@ const detectRisk = async ({
   if (imageText.signal === IMAGE_TEXT_MISMATCH_SIGNAL) {
     riskScore += IMAGE_TEXT_MISMATCH_WEIGHT;
     factors.push(IMAGE_TEXT_MISMATCH_FACTOR);
+  }
+
+  // 10. Category disagreement (supporting-only). The worker compares the
+  //     MobileNet-predicted category to the seller's chosen category and only
+  //     passes a confident disagreement (>= 0.5) through here.
+  if (categoryMismatch) {
+    riskScore += CATEGORY_MISMATCH_WEIGHT;
+    factors.push(CATEGORY_MISMATCH_FACTOR);
   }
 
   riskScore = clamp(riskScore, 0, 100);
@@ -798,4 +858,8 @@ module.exports = {
   IMAGE_TEXT_MISMATCH_WEIGHT,
   classifyImageTextMatch,
   assessImageTextMismatch,
+  CATEGORY_MISMATCH_SIGNAL,
+  CATEGORY_MISMATCH_WEIGHT,
+  CATEGORY_MISMATCH_MIN_CONFIDENCE,
+  assessCategoryAgreement,
 };

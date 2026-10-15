@@ -17,7 +17,7 @@ const {
 const computerVision = require('../services/computerVision');
 const SHARED_LIMITS = require('../constants');
 const { calculateRecommendedPrice } = require('../services/priceRecommendation');
-const { detectRisk, collectHashSet } = require('../services/fraudDetection');
+const { detectRisk, collectHashSet, assessCategoryAgreement } = require('../services/fraudDetection');
 const {
   verifyOwnershipForListing,
   verifyPossession,
@@ -729,6 +729,8 @@ const createProduct = async (req, res, next) => {
       riskLevel: identityResult?.outcome === 'flagged' ? 'high' : risk.riskLevel,
       factors: risk.factors,
       riskFactorCategories: risk.riskFactorCategories,
+      v1RiskScore: risk.riskScore,
+      fusionMode: 'v1',
       assessedAt: new Date(),
     };
     await product.save();
@@ -788,6 +790,44 @@ const cleanupUnreferencedImages = async (publicIds, productId) => {
   }
 };
 
+/**
+ * Re-run the fraud risk assessment for an edited listing and persist it. The
+ * no-image PUT paths previously returned without re-scoring, so a category /
+ * title / description / price edit was not reflected until the image worker
+ * happened to run. Re-uses the persisted MobileNet prediction (stored on the
+ * listing) so the category-agreement signal is re-evaluated against the new
+ * category too. Best-effort: a scoring failure never blocks the edit response.
+ */
+const rerunRiskAssessment = async (product) => {
+  try {
+    const fresh = await Product.findById(product._id);
+    if (!fresh) return;
+    const categoryDoc = await Category.findById(fresh.category).select('name');
+    const agreement = assessCategoryAgreement({
+      predictedCategory: fresh.aiAnalysis?.classification?.predictedCategory,
+      confidence: fresh.aiAnalysis?.classification?.confidence,
+      chosenCategoryName: categoryDoc?.name,
+    });
+    const risk = await detectRisk({
+      product: fresh,
+      hashes: fresh.aiAnalysis?.imageHashes || [],
+      aiAnalysis: fresh.aiAnalysis || {},
+      categoryMismatch: agreement.mismatch,
+    });
+    if (!fresh.aiAnalysis) fresh.aiAnalysis = {};
+    fresh.aiAnalysis.riskAssessment = {
+      riskScore: risk.riskScore,
+      riskLevel: risk.riskLevel,
+      factors: risk.factors,
+      riskFactorCategories: risk.riskFactorCategories,
+      assessedAt: new Date(),
+    };
+    await fresh.save();
+  } catch (err) {
+    console.warn(`[Product] Risk re-assessment failed for ${product._id}: ${err.message}`);
+  }
+};
+
 const updateProduct = async (req, res, next) => {
   try {
     const product = await Product.findById(req.params.id);
@@ -819,8 +859,19 @@ const updateProduct = async (req, res, next) => {
       'specifications',
       'location',
     ];
+    // Which edits warrant an immediate re-score? Category/title/description/
+    // price drive the fraud signals; other fields (brand, condition, …) do not.
+    const RISK_RELEVANT_FIELDS = ['category', 'title', 'description', 'price', 'originalPrice'];
+    let riskRelevantChanged = false;
     for (const key of allowed) {
-      if (req.body[key] !== undefined) product[key] = req.body[key];
+      if (req.body[key] === undefined) continue;
+      if (
+        RISK_RELEVANT_FIELDS.includes(key) &&
+        String(req.body[key] ?? '') !== String(product[key] ?? '')
+      ) {
+        riskRelevantChanged = true;
+      }
+      product[key] = req.body[key];
     }
 
     const incoming =
@@ -831,6 +882,12 @@ const updateProduct = async (req, res, next) => {
     if (!incoming) {
       // No image change — existing behavior
       await product.save();
+
+      // A risk-relevant field edit (category/title/description/price) must be
+      // reflected immediately, not only when the image worker next runs.
+      if (riskRelevantChanged) {
+        await rerunRiskAssessment(product);
+      }
 
       const populated = await Product.findById(product._id)
         .populate('category', 'name slug')
@@ -855,6 +912,12 @@ const updateProduct = async (req, res, next) => {
         isPrimary: idx === 0,
       }));
       await product.save();
+
+      // A risk-relevant field edit (category/title/description/price) must be
+      // reflected immediately, not only when the image worker next runs.
+      if (riskRelevantChanged) {
+        await rerunRiskAssessment(product);
+      }
 
       const populated = await Product.findById(product._id)
         .populate('category', 'name slug')
@@ -1021,6 +1084,8 @@ const updateProduct = async (req, res, next) => {
       riskLevel: risk.riskLevel,
       factors: risk.factors,
       riskFactorCategories: risk.riskFactorCategories,
+      v1RiskScore: risk.riskScore,
+      fusionMode: 'v1',
       assessedAt: new Date(),
     };
     await product.save();
