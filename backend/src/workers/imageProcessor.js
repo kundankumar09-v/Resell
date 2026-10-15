@@ -8,6 +8,7 @@ const {
   orientationHashesFromBuffer,
 } = require('../services/imageHash');
 const { createCVProvider } = require('../services/cvAdapter');
+const { analyzeDetectedObjects } = require('../services/imageClassifier');
 const { extractColorHistogram, downloadImageBuffer } = require('../services/imageUtils');
 const cvProvider = createCVProvider();
 const { calculateRecommendedPrice } = require('../services/priceRecommendation');
@@ -70,6 +71,21 @@ const { cosineSimilarity } = require('../services/textSimilarity');
           }),
         ]);
 
+        // Multi-object analysis (README §7.12): COCO-SSD boxes → per-crop
+        // MobileNet classification + CNN embedding. Best-effort and never
+        // blocking — no detections or any failure yields [] and the
+        // whole-image analysis above applies exactly as before.
+        let detectedObjects = [];
+        try {
+          const multi = await analyzeDetectedObjects(buffer, {
+            filename: image.originalname || 'image.jpg',
+            title: productData.title,
+          });
+          if (Array.isArray(multi.objects)) detectedObjects = multi.objects;
+        } catch (err) {
+          console.warn('[Worker] Multi-object analysis warning:', err.message);
+        }
+
         results.push({
           url: image.url,
           publicId: image.publicId,
@@ -78,6 +94,7 @@ const { cosineSimilarity } = require('../services/textSimilarity');
           rotationHashes,
           vflipHash,
           colorHistogram,
+          detectedObjects,
           analysis: {
             conditionScore: condition.score,
             damageScore: damage.score,
@@ -361,6 +378,12 @@ const { cosineSimilarity } = require('../services/textSimilarity');
             // down). Persisted so later edit re-scores reproduce the signal.
             imageTextSimilarity:
               typeof imageTextSimilarity === 'number' ? imageTextSimilarity : null,
+            // Cover-image multi-object detections (§7.12). The primary
+            // (first) image drives the listing-level objects; per-image crop
+            // detail is recomputed on demand, never persisted per image.
+            detectedObjects: Array.isArray(results[0]?.detectedObjects)
+              ? results[0].detectedObjects
+              : [],
             riskAssessment: {
               riskScore: mlFraud.fraudScore,
               riskLevel: mlFraud.riskLevel,

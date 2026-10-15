@@ -150,6 +150,25 @@ const productSchema = new mongoose.Schema(
       // CLIP image↔title cosine similarity (README §7.9). null = not evaluated
       // (ML service down, or the title/image embedding was unavailable).
       imageTextSimilarity: { type: Number, default: null, min: -1, max: 1 },
+      // Multi-object detections for the cover (first) image (README §7.12):
+      // one entry per COCO-SSD box with its per-crop MobileNet classification
+      // and local CNN embedding. Empty when nothing was detected or detection
+      // failed — whole-image analysis then applies exactly as before.
+      detectedObjects: [
+        {
+          bbox: {
+            x: { type: Number, default: 0 },
+            y: { type: Number, default: 0 },
+            width: { type: Number, default: 0 },
+            height: { type: Number, default: 0 },
+          },
+          label: { type: String, default: 'object' },
+          score: { type: Number, default: 0, min: 0, max: 1 },
+          cropClassification: { type: String, default: 'Other' },
+          cropConfidence: { type: Number, default: 0, min: 0, max: 1 },
+          cropEmbedding: { type: [Number], default: [] },
+        },
+      ],
       imageHashes: [{ type: String }], // Legacy - keeping for backward compatibility
       // Rotation (90/180/270) and vertical-flip perceptual hashes extend the
       // flat imageHashes list (which carries normal + mirror entries) so
