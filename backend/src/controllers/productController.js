@@ -829,6 +829,41 @@ const rerunRiskAssessment = async (product) => {
   }
 };
 
+/**
+ * Enqueue a full image-worker re-analysis for an edited listing (best-effort:
+ * a queue failure never blocks the edit response). Used when the category or
+ * the primary object changes so the AI suggestion, category-agreement signal
+ * and price/fraud refresh follow the edit. The worker preserves a
+ * seller-chosen primaryObjectIndex across re-runs.
+ */
+const enqueueReanalysis = async (product) => {
+  try {
+    const { imageProcessingQueue } = require('../queues');
+    await imageProcessingQueue.add('analyze-product', {
+      productId: product._id.toString(),
+      images: product.images.map((img) => ({
+        url: img.url,
+        publicId: img.publicId,
+      })),
+      productData: {
+        title: product.title,
+        description: product.description,
+        price: product.price,
+        originalPrice: product.originalPrice,
+        category: product.category,
+        brand: product.brand,
+        model: product.model,
+        condition: product.condition,
+        yearsUsed: product.yearsUsed,
+        specifications: product.specifications || [],
+        location: product.location || {},
+      },
+    });
+  } catch (err) {
+    console.warn(`[Product] Could not enqueue re-analysis for ${product._id}: ${err.message}`);
+  }
+};
+
 const updateProduct = async (req, res, next) => {
   try {
     const product = await Product.findById(req.params.id);
@@ -917,34 +952,12 @@ const updateProduct = async (req, res, next) => {
         await rerunRiskAssessment(product);
       }
 
-      // A primary-object change re-runs the full AI pipeline through the
-      // worker so the category suggestion and fingerprint follow the chosen
-      // crop (the worker preserves the seller's primaryObjectIndex).
-      if (primaryObjectChanged) {
-        try {
-          await imageProcessingQueue.add('analyze-product', {
-            productId: product._id.toString(),
-            images: product.images.map((img) => ({
-              url: img.url,
-              publicId: img.publicId,
-            })),
-            productData: {
-              title: product.title,
-              description: product.description,
-              price: product.price,
-              originalPrice: product.originalPrice,
-              category: product.category,
-              brand: product.brand,
-              model: product.model,
-              condition: product.condition,
-              yearsUsed: product.yearsUsed,
-              specifications: product.specifications || [],
-              location: product.location || {},
-            },
-          });
-        } catch (err) {
-          console.warn(`[Product] Could not enqueue re-analysis for ${product._id}: ${err.message}`);
-        }
+      // A category change re-runs the full AI pipeline through the worker so
+      // the category suggestion, category-agreement signal and price/fraud
+      // refresh follow the new category (applying the Sell-page AI suggestion
+      // re-enqueues processing — it is never a local-only patch).
+      if (primaryObjectChanged || req.body.category !== undefined) {
+        await enqueueReanalysis(product);
       }
 
       const populated = await Product.findById(product._id)
@@ -975,6 +988,11 @@ const updateProduct = async (req, res, next) => {
       // reflected immediately, not only when the image worker next runs.
       if (riskRelevantChanged) {
         await rerunRiskAssessment(product);
+      }
+
+      // Same re-analysis guarantee as the no-image path above.
+      if (primaryObjectChanged || req.body.category !== undefined) {
+        await enqueueReanalysis(product);
       }
 
       const populated = await Product.findById(product._id)
