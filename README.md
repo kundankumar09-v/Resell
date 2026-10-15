@@ -24,6 +24,7 @@
    - [7.9 Risk Scoring — Unified Fraud Engine](#79-risk-scoring--unified-fraud-engine)
     - [7.10 Scam-Text Pattern Analyzer](#710-scam-text-pattern-analyzer)
     - [7.11 Duplicate Detection — Complete Flow](#711-duplicate-detection--complete-flow)
+    - [7.12 Multi-Object Image Handling](#712-multi-object-image-handling)
 8. [ML Microservice (Python / FastAPI)](#8-ml-microservice-python--fastapi)
    - [8.1 CLIP Embeddings](#81-clip-embeddings)
    - [8.2 LightGBM Fraud Pipeline v2](#82-lightgbm-fraud-pipeline-v2)
@@ -878,6 +879,36 @@ Numbers below are from `backend/scripts/phash_validation_results.md` (validated 
 
 So a single `node scripts/seed.js` run demonstrates the pHash, mirror, visual, and text layers feeding one aggregated score. (Redis/BullMQ workers need not be running: the printed scores come from `detectRisk()`; the fuller CNN/CLIP signals would require the workers and ML service up.) Run `node scripts/seed.js --with-burst` to additionally demonstrate the behavioral listing-velocity layer.
 
+### 7.12 Multi-Object Image Handling
+
+**Files:** `backend/src/services/imageClassifier.js` (detection + crops), `backend/src/workers/imageProcessor.js` (persistence + primary), `backend/src/controllers/productController.js` (`PUT primaryObjectIndex`), `frontend/src/pages/SellProduct.jsx` (overlays + picker)
+
+Sellers often photograph several items together (a desk lot, a "bundle" photo). Classifying the whole frame then mislabels the listing and the visual fingerprint matches the *arrangement* instead of the *item*. The multi-object path handles this per cover image:
+
+```
+Cover image buffer
+    |
+    v
+COCO-SSD detect() (same TF.js stack as MobileNet, lazy-loaded, cold start logged)
+  - boxes with score >= OBJECT_DETECTION_MIN_SCORE (0.5)
+  - greedy NMS: IoU > OBJECT_DETECTION_IOU_THRESHOLD (0.6) keeps the highest score
+  - capped at OBJECT_DETECTION_MAX_OBJECTS (8) crops per image
+    |
+    v (per box)
+Sharp crop (+10% padding per side, clamped) -> MobileNet classification + local CNN embedding
+    |
+    v
+aiAnalysis.detectedObjects: [{ bbox, label, score, cropClassification, cropConfidence, cropEmbedding }]
+```
+
+- **No detections or any detection failure → whole-image analysis fallback exactly as today.** Detection is best-effort and never blocks listing creation.
+- **Primary product selection.** Objects arrive sorted by detection score, so index 0 is the default primary. When `>= 2` objects are detected (`aiAnalysis.multiObject: true`), the primary crop's `cropClassification` drives the listing-level suggested category (and therefore the §7.9 category-agreement signal); a single object leaves the status-quo whole-image category untouched.
+- **Seller override.** After publishing, the Sell page polls the worker result and — when `multiObject` — renders bounding-box overlays with labels ("Bottle 93%") over the cover photo. Clicking a box and choosing *Set as primary item* sends `PUT /api/products/:id { primaryObjectIndex }`: the backend re-points the category suggestion at that crop, re-runs the risk assessment, and re-enqueues the image worker (which preserves the seller's choice across re-runs). An out-of-range index is rejected with `400 INVALID_PRIMARY_OBJECT`.
+- **Fingerprint.** `buildProductFingerprint()` appends the primary crop's embedding as an extra crosswise comparison vector (same local-MobileNet space crop-vs-crop), so a bundle photo of items A+B matches a single photo of A. Whole-image CLIP features are untouched; mismatched embedding spaces are skipped, never compared.
+- **Bundle note.** `>= 3` objects store an informational `aiAnalysis.bundleNote` ("Bundle photo: N distinct items detected …"). It is **never a risk signal** and is displayed to admins/owners only (stripped for other viewers in `GET /product/:id`).
+
+**Honest scope note.** COCO-SSD covers the 80 common COCO classes (bottles, cups, phones, chairs, …). Exotic or highly stylised items it was never trained on (collectibles, niche hardware, unusual angles) yield no boxes and silently take the whole-image fallback — the listing is never penalised for the detector's blind spots. Detection runs on the cover image only; per-image crop detail is recomputed on demand, never persisted per image.
+
 ---
 
 ## 8. ML Microservice (Python / FastAPI)
@@ -1112,6 +1143,21 @@ aiAnalysis: {
   suggestedCategory: String,    // MobileNet-suggested category name
   categoryConfidence: Number,   // 0-1 confidence
 
+  // Multi-object detections, cover image only (see §7.12)
+  detectedObjects: [{          // one entry per COCO-SSD box (score >= 0.5, NMS IoU 0.6)
+    bbox: { x, y, width, height }, // original-image pixels (detectedImageWidth/Height below)
+    label: String,              // COCO class, e.g. 'bottle'
+    score: Number,              // detection confidence 0-1
+    cropClassification: String, // per-crop MobileNet category
+    cropConfidence: Number,     // 0-1
+    cropEmbedding: [Number],    // local MobileNet embedding (crop-vs-crop fingerprint space)
+  }],
+  detectedImageWidth: Number,   // cover-image pixels the bboxes refer to
+  detectedImageHeight: Number,
+  multiObject: Boolean,         // true when >= 2 objects detected
+  primaryObjectIndex: Number,   // seller override (null = highest score); drives suggestion + fingerprint
+  bundleNote: String,           // informational note when >= 3 objects; admin/owner-only, never a risk signal
+
   // Fraud risk
   riskAssessment: {
     riskScore: Number,          // 0-100 aggregated fraud risk (v1, or fused v1/v2)
@@ -1207,6 +1253,12 @@ DUPLICATE_SCAN_CAP=500
 VISUAL_SCAN_CAP=200
 DESC_DUP_SCAN_CAP=100
 OTHER_SELLER_DESC_SCAN_CAP=200
+
+# ─────── Multi-object detection (§7.12) ───────
+# COCO-SSD box score floor; NMS overlap threshold (keep highest); per-image crop cap
+OBJECT_DETECTION_MIN_SCORE=0.5
+OBJECT_DETECTION_IOU_THRESHOLD=0.6
+OBJECT_DETECTION_MAX_OBJECTS=8
 
 # ─────────────── Identifier Hashing ────────────
 # HMAC key for physical-product identifier hashes (serial/IMEI/VIN). Min 32
