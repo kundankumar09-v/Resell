@@ -11,7 +11,8 @@ const { createCVProvider } = require('../services/cvAdapter');
 const { extractColorHistogram, downloadImageBuffer } = require('../services/imageUtils');
 const cvProvider = createCVProvider();
 const { calculateRecommendedPrice } = require('../services/priceRecommendation');
-const { detectRisk } = require('../services/fraudDetection');
+const { detectRisk, fuseFraudScores } = require('../services/fraudDetection');
+const { cosineSimilarity } = require('../services/textSimilarity');
 
 (async () => {
   // The queue module resolves its shared Redis connection asynchronously —
@@ -144,6 +145,22 @@ const { detectRisk } = require('../services/fraudDetection');
         }
       } catch (err) {
         console.warn('[Worker] ML embedding extraction warning:', err.message);
+      }
+
+      // Image–text mismatch (supporting-only v1 signal, README §7.9). Requires
+      // BOTH the CLIP image embedding and a CLIP text embedding of the title —
+      // when the ML service is down getTextEmbedding returns null and the check
+      // is skipped silently (no error, no risk points).
+      let imageTextSimilarity = null;
+      if (clipEmbedding.length === 512 && productData.title) {
+        try {
+          const titleEmbedding = await mlClient.getTextEmbedding(productData.title);
+          if (titleEmbedding) {
+            imageTextSimilarity = cosineSimilarity(clipEmbedding, titleEmbedding);
+          }
+        } catch (err) {
+          console.warn('[Worker] Image-text similarity warning:', err.message);
+        }
       }
 
       // 1. ML Price Estimation — weighted blend with the local heuristic so
@@ -314,6 +331,10 @@ const { detectRisk } = require('../services/fraudDetection');
               source: priceSource,
               generatedAt: new Date(),
             },
+            // Image↔title CLIP cosine similarity (null when the ML service was
+            // down). Persisted so later edit re-scores reproduce the signal.
+            imageTextSimilarity:
+              typeof imageTextSimilarity === 'number' ? imageTextSimilarity : null,
             riskAssessment: {
               riskScore: mlFraud.fraudScore,
               riskLevel: mlFraud.riskLevel,
@@ -443,13 +464,26 @@ const { detectRisk } = require('../services/fraudDetection');
           product,
           hashes: product.aiAnalysis.imageHashes,
           aiAnalysis: product.aiAnalysis,
+          imageTextSimilarity,
+        });
+
+        // v1/v2 score fusion (README §8.4): when the ML service returned a
+        // calibrated v2 probability, take the max of the two engines so either
+        // can escalate but neither can downgrade the other. Legacy pipeline or
+        // ML-unavailable -> v1 only.
+        const fusion = fuseFraudScores({
+          v1RiskScore: risk.riskScore,
+          v2FraudProbability: mlFraud.fraudProbability,
         });
 
         product.aiAnalysis.riskAssessment = {
-          riskScore: risk.riskScore,
-          riskLevel: risk.riskLevel,
+          riskScore: fusion.riskScore,
+          riskLevel: fusion.riskLevel,
           factors: risk.factors,
           riskFactorCategories: risk.riskFactorCategories,
+          v1RiskScore: fusion.v1RiskScore,
+          v2FraudProbability: fusion.v2FraudProbability,
+          fusionMode: fusion.fusionMode,
           assessedAt: new Date(),
         };
 

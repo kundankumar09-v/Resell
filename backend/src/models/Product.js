@@ -147,6 +147,9 @@ const productSchema = new mongoose.Schema(
       // condition/damage scores (false = insufficient evidence in the UI).
       visualAnalysisAvailable: { type: Boolean, default: false },
       damageDescription: { type: String, default: '' },
+      // CLIP image↔title cosine similarity (README §7.9). null = not evaluated
+      // (ML service down, or the title/image embedding was unavailable).
+      imageTextSimilarity: { type: Number, default: null, min: -1, max: 1 },
       imageHashes: [{ type: String }], // Legacy - keeping for backward compatibility
       // Rotation (90/180/270) and vertical-flip perceptual hashes extend the
       // flat imageHashes list (which carries normal + mirror entries) so
@@ -186,6 +189,16 @@ const productSchema = new mongoose.Schema(
         // what non-admin surfaces see — the exact factor strings (which expose
         // internal thresholds) stay admin-only.
         riskFactorCategories: [{ type: String }],
+        // v1/v2 score fusion audit trail (see fuseFraudScores in
+        // fraudDetection.js + README §8.4). Kept raw so the combination policy
+        // can be re-evaluated without re-running either engine.
+        v1RiskScore: { type: Number, default: null, min: 0, max: 100 },
+        v2FraudProbability: { type: Number, default: null, min: 0, max: 1 },
+        fusionMode: {
+          type: String,
+          enum: ['v1', 'v2', 'v1+v2-max'],
+          default: 'v1',
+        },
         // Categories a human moderator explicitly overruled (appeal approved).
         // Fed back to the ML pipeline as false-positive training signal and
         // shown to sellers as the disputed aspects of their listing.

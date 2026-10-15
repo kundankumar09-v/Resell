@@ -47,6 +47,26 @@ async function getEmbedding(imageUrl) {
 }
 
 /**
+ * Embed a single piece of text with the ML service's CLIP text encoder.
+ * Used for near-duplicate description detection (fraudDetection.js).
+ * Returns null (never throws) when the ML service is unavailable — callers
+ * fall back to the pure-JS n-gram similarity instead.
+ */
+async function getTextEmbedding(text) {
+  if (!text || typeof text !== 'string') return null;
+  try {
+    const res = await client.post('/text-embed', { text }, { timeout: 5000 });
+    if (res.data?.success && Array.isArray(res.data.embedding)) {
+      return res.data.embedding;
+    }
+    return null;
+  } catch (err) {
+    console.warn(`[MLClient] Text embedding failed: ${err.message}`);
+    return null;
+  }
+}
+
+/**
  * Extract 512-D CLIP embeddings for multiple image URLs
  */
 async function getBatchEmbeddings(imageUrls) {
@@ -206,6 +226,7 @@ module.exports = {
   checkHealth,
   getEmbedding,
   getBatchEmbeddings,
+  getTextEmbedding,
   checkFraud,
   estimatePrice,
   blendWithMl,
