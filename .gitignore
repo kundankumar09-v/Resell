@@ -23,3 +23,7 @@ Thumbs.db
 # Throwaway command-output captures
 backend/*_out.txt
 backend/*_output.txt
+*.pyc
+*.bak
+.venv/
+*.pt
