@@ -27,6 +27,7 @@ const {
   mergeVariants,
 } = require('../services/duplicatePipeline');
 const { cosineSimilarity } = require('../services/textSimilarity');
+const dupClient = require('../services/dupClient'); // dupdetect v2 (shadow)
 
 (async () => {
   // The worker is a standalone process (no server.js) — load env and connect
@@ -56,6 +57,7 @@ const { cosineSimilarity } = require('../services/textSimilarity');
       console.log(`[Worker] Processing images for product ${productId}`);
 
       const results = [];
+      let coverBuffer = null; // raw cover-image bytes (dupdetect v2 hook)
       for (const image of images) {
         let buffer;
         if (image.buffer) {
@@ -70,6 +72,7 @@ const { cosineSimilarity } = require('../services/textSimilarity');
 
         // Images were already uploaded to Cloudinary during the request.
         // Reuse the existing URL/publicId instead of uploading again.
+        if (!coverBuffer) coverBuffer = buffer;
         const hash = await perceptualHashFromBuffer(buffer);
         const mirrorHash = await mirrorPerceptualHashFromBuffer(buffer);
         const { rotationHashes, vflipHash } = await orientationHashesFromBuffer(buffer);
@@ -616,6 +619,32 @@ const { cosineSimilarity } = require('../services/textSimilarity');
         }
 
         await product.save();
+
+        // ---- DupDetect v2 shadow hook (new pipeline, log-only) ----------
+        // Ask the v2 service for a verdict on the cover image + text and
+        // register the listing in its store. SHADOW mode: verdicts are only
+        // logged next to the legacy assessment; status is never changed.
+        try {
+          const verdict = await dupClient.queryDuplicate({
+            listingId: productId,
+            sellerId: product.seller?._id || product.seller,
+            imageBuffer: coverBuffer,
+            title: productData.title,
+            description: productData.description,
+          });
+          dupClient.logShadowVerdict(productId, verdict, {
+            legacy: product.aiAnalysis?.duplicateAssessment?.decision || 'n/a',
+          });
+          await dupClient.addListing({
+            listingId: productId,
+            sellerId: product.seller?._id || product.seller,
+            imageBuffer: coverBuffer,
+            title: productData.title,
+            description: productData.description,
+          });
+        } catch (dupErr) {
+          console.warn(`[Worker] dupdetect v2 shadow hook failed for ${productId}: ${dupErr.message}`);
+        }
       } finally {
         // The main flow's riskAssessment write is done (or has failed) —
         // the background visual block may proceed. Always resolve so it can

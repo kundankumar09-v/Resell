@@ -344,6 +344,14 @@ const forceDeleteProduct = async (req, res, next) => {
     product.status = 'removed';
     await product.save();
 
+    // DupDetect v2: tombstone the removed listing so a delete-and-repost of
+    // the same photos/text is still caught (fail-open by design).
+    try {
+      await require('../services/dupClient').deleteListing(product._id);
+    } catch (dupDelErr) {
+      console.warn('[DupClient] tombstone failed for', String(product._id), dupDelErr.message);
+    }
+
     await Promise.all([
       Favorite.deleteMany({ product: product._id }),
       Notification.deleteMany({ 'payload.productId': product._id }),
