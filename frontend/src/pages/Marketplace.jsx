@@ -137,7 +137,8 @@ export default function Marketplace() {
   }, [filters, currency, rates]);
 
   const setFilter = (key, value) => {
-    setFilters((prev) => ({ ...prev, [key]: value, page: 1 }));
+    // Any filter change resets to page 1 — except a pagination click itself.
+    setFilters((prev) => ({ ...prev, [key]: value, ...(key !== 'page' ? { page: 1 } : {}) }));
   };
 
   const clearFilters = () => {
