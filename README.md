@@ -32,6 +32,7 @@
    - [8.3 Quantile Price Estimation (kNN)](#83-quantile-price-estimation-knn)
    - [8.4 Shadow Mode & A/B Testing](#84-shadow-mode--ab-testing)
    - [8.5 ANN Index (HNSW)](#85-ann-index-hnsw)
+   - [8.6 DupDetect v2 Service (SSCD + Multi-Hash + Text Fusion)](#86-dupdetect-v2-service-sscd--multi-hash--text-fusion)
 9. [Real-Time Features](#9-real-time-features)
 10. [Background Job Workers](#10-background-job-workers)
 11. [Database Models](#11-database-models)
@@ -75,7 +76,7 @@ cd backend && npm run seed -- --force
 
 | Feature | Description |
 |---|---|
-| **Image Fraud Detection** | Multi-layer pipeline: 6-hash pHash probing, CLIP-backed whole-image vector matching, cross-category CLIP search, and the feature-flagged LightGBM fraud pipeline |
+| **Image Fraud Detection** | Multi-layer pipeline: 6-hash pHash probing, CLIP-backed whole-image vector matching, cross-category CLIP search, feature-flagged LightGBM fraud pipeline, and the DupDetect v2 microservice (Meta SSCD copy detection + 256-bit PDQ + 2-signal cross-seller gating + repost-after-delete tombstones) |
 | **Product Identity** | Serial / IMEI / VIN registry with cryptographic possession verification and provenance chain |
 | **AI Price Recommendation** | Depreciation model + market comparables + visual condition adjustment, blended with the ML quantile estimate (`ML_BLEND_WEIGHT`) |
 | **MobileNet Auto-Category** | Automatic product category suggestion from uploaded images |
@@ -116,11 +117,12 @@ cd backend && npm run seed -- --force
 |  |             BULLMQ WORKERS (Redis-backed)                        | |
 |  |  imageProcessor.js  -  priceAnalyzer.js                         | |
 |  +----------------------+------------------------------------------+ |
-+-------------------------|--------------------------------------------|
++-------------------------|--------------------------------------------+
                           | HTTP (internal)
 +-------------------------v-------------------------------------------+
-|               ML MICROSERVICE  (Python / FastAPI)                   |
-|  CLIP ViT-B/32 Embeddings - LightGBM Fraud v2 - kNN Price - HNSW   |
+|               ML MICROSERVICES (Python / FastAPI)                   |
+|  :8000 Core: CLIP ViT-B/32, LightGBM Fraud v2, kNN Price, HNSW      |
+|  :8100 DupDetect v2: Meta SSCD (512-D), PDQ-256, MIH, Text Fusion  |
 +---------------------------------------------------------------------+
           |                        |                       |
 +---------v------+      +----------v------+    +----------v----------+
@@ -151,7 +153,9 @@ User uploads images
     +- 4. /extract-cnn image embedding (CLIP-backed 512-D vector in legacy cnnFeatures)
     +- 5. Primary-image CLIP embedding, local/ML price estimate
     +- 6. Description/text and image/category risk signals
-    +- 7. v1 risk aggregation + available v2 fusion -> aiAnalysis
+    +- 7. v1 risk aggregation + available v2 fusion -> aiAnalysis saved
+    +- 8. DupDetect v2 shadow hook: query /dup/query (:8100), log [DupClient][SHADOW]
+          verdict, and register listing via /dup/add (SSCD + PDQ + text fusion)
 ```
 
 > Ordering note: the list above is the conceptual pipeline (§7.1). The exact
@@ -189,14 +193,17 @@ User uploads images
 | Image Storage | Cloudinary |
 | Security | Helmet, express-rate-limit, express-mongo-sanitize |
 
-### ML Microservice
+### ML Microservices
 | Layer | Technology |
 |---|---|
 | Runtime | Python 3.11 |
-| Framework | FastAPI + Uvicorn |
-| Vision Model | CLIP ViT-B/32 (open-clip-torch) |
-| Fraud Classifier | LightGBM (gradient boosted trees) |
-| Price Estimation | kNN + quantile regression |
+| Framework | FastAPI + Uvicorn (Port 8000: Core ML API; Port 8100: DupDetect v2 API) |
+| Vision / Multimodal | CLIP ViT-B/32 (`open-clip-torch`, LAION-2B) |
+| Copy Detection Model | Meta SSCD (`sscd_disc_mixup.torchscript.pt`, 512-D L2-normalized embeddings) |
+| Perceptual Hashing | 64-bit DCT pHash D4 (plain/mirror/r90/r180/r270/vflip) + 256-bit PDQ (`pdqhash`) |
+| Hash / Vector Indexing | Multi-Index Hashing (MIH, 16 buckets) + BK-tree + HNSW vector index (`faiss-cpu`) |
+| Fraud Classifier | LightGBM (gradient boosted trees, 14 engineered features) |
+| Price Estimation | kNN + quantile regression (q10/q50/q90 + conformal prediction) |
 | ANN Search | HNSW index (FAISS `IndexHNSWFlat`, H=32, efSearch=64) |
 | Calibration | Isotonic; attempted LogisticRegression fallback (see §8.2) |
 
@@ -348,10 +355,12 @@ The backend is a monolithic Express application running on **port 5000**.
 
 ## 7. ML / AI System — Deep Dive
 
-The fraud detection, condition assessment, and price recommendation system is split across two layers:
+The fraud detection, condition assessment, and price recommendation system is split across two architectural layers:
 
-1. **Node.js services** — lightweight, always-on analysis using TF.js MobileNet + Sharp pixel analysis
-2. **Python ML microservice** — heavier CLIP + LightGBM models, called asynchronously via HTTP
+1. **Node.js services** — lightweight, always-on analysis using TF.js MobileNet + Sharp pixel analysis + 64-bit DCT pHash
+2. **Python ML microservices** —
+   - **Core ML Service (Port 8000)**: OpenCLIP ViT-B/32 multimodal embeddings + LightGBM fraud classifier v2 + kNN quantile price recommendation + HNSW ANN index
+   - **DupDetect v2 Service (Port 8100)**: Meta SSCD (Self-Supervised Copy Detection) 512-D embeddings + 256-bit PDQ hash + D4 pHash variants + IMEI/Serial parsing + text fusion with 2-signal gating and deletion tombstones
 
 ### 7.1 Image Fraud Detection Pipeline
 
@@ -395,6 +404,11 @@ Image Upload
     |          -> scam-text lexical analyzer -> up to +25 (section 7.10)
     |
     +- Step 9: Aggregate (v1 + available v2 fusion) -> product.aiAnalysis updated
+    |
+    +- Step 10: DupDetect v2 shadow hook (FastAPI :8100, log-only by default)
+               -> POST /dup/query: evaluate SSCD + PDQ + identifiers + text fusion
+               -> log structured shadow verdict [DupClient][SHADOW]
+               -> POST /dup/add: register listing vector & hashes in memory store
 ```
 
   Identifier ownership verification runs in the product API request before the background image job (only
@@ -914,8 +928,68 @@ Stored in aiAnalysis.riskAssessment (+ imageHashes / rotationHashes / vflipHash)
 
 3. **No single signal proves fraud.** pHash is a high-precision cheap gate; stored-vector visual similarity is explicitly *supporting-only* (§7.4); scam-text is capped at +25 (§7.10). All signals aggregate in `detectRisk()` and, when both engines are present, fuse via `max(v1, round(v2*100))` (§8.4) — either engine may escalate, neither can downgrade, and never on a single weak signal.
 
+4. **Multi-signal gating in DupDetect v2.** In the v2 service, a cross-seller `block` requires **at least two independent corroborating signals** (e.g. hash + SSCD embedding, hash + text, SSCD + text), an active tombstone match, or an exact hardware identifier match with an embedding in the review band. Text alone never auto-blocks.
+
+#### DupDetect v2 — 5-Signal Copy Detection Engine (Python / FastAPI :8100)
+
+**Files:** `ml-service/pipeline/dupdetect/` (`api.py`, `pipeline.py`, `embeddings.py`, `hashing.py`, `text_signal.py`), `backend/src/services/dupClient.js`
+
+While pHash and CNN cosine comparisons provide fast in-process protection within Node.js, `dupdetect v2` runs as a dedicated Python microservice designed specifically for deep copy detection, adversarial evasion resistance, and repost-after-delete enforcement:
+
+```
+Probe (Listing ID, Seller ID, Image, Title, Description)
+    |
+    +---> Signal 1: Multi-Hash (pHash D4 6-variants + 256-bit PDQ with quality gate)
+    |               Indexed via Multi-Index Hashing (MIH, 16 buckets) and BK-tree
+    |
+    +---> Signal 2: Deep Copy Embeddings (Meta SSCD ViT/ResNet 512-D, HNSW indexed)
+    |               Cosine similarity evaluated against active + tombstone index
+    |
+    +---> Signal 3: Hardware Identifiers (Regex extraction of IMEI & Serial)
+    |               Luhn algorithm validates 15-digit IMEIs; serials require >=8 alphanumeric
+    |
+    +---> Signal 4: Multimodal Text Fusion (OpenCLIP ViT-B/32 text embeddings)
+    |               Cosine similarity >= 0.92 indicates near-duplicate description
+    |
+    +---> Signal 5: Lifecycle & Repost-After-Delete Tombstones
+                    In-memory tombstone index retains hashes & embeddings of deleted items
+    |
+    v
+2-Signal Decision Gating Engine:
+    - BLOCK: (1) Tombstone match with hash or SSCD >= block_thr (0.4802)
+             (2) Identifier match + SSCD in review band (>= 0.2185)
+             (3) Cross-seller with 2 corroborating signals:
+                 hash + SSCD >= block_thr | hash + text | SSCD >= block_thr + text
+    - REVIEW: Same-seller repost, text near-duplicate, or single signal in review band
+    - ALLOW: No corroborating signals or below review threshold
+```
+
+##### Gating Decision Matrix
+
+| Candidate Relationship | Triggering Signals | Decision | Action / Reason |
+|---|---|---|---|
+| **Tombstone Repost** | Probe matches deleted listing (pHash ≤ 14, PDQ ≤ 32, or SSCD ≥ 0.4802) | **BLOCK** | `repost_after_delete` (catches delete-and-repost cycle) |
+| **Identifier Match** | Same Luhn-valid IMEI or Serial + SSCD ≥ 0.2185 | **BLOCK** | `identifier_match` (physical item already cataloged) |
+| **Cross-Seller Theft** | pHash/PDQ match **AND** SSCD ≥ 0.4802 | **BLOCK** | `hash_hit` + `embedding_above_block` |
+| **Cross-Seller Theft** | pHash/PDQ match **AND** Text Cosine ≥ 0.92 | **BLOCK** | `hash_hit` + `text_hit` |
+| **Cross-Seller Theft** | SSCD ≥ 0.4802 **AND** Text Cosine ≥ 0.92 | **BLOCK** | `embedding_above_block` + `text_hit` |
+| **Same-Seller Relist** | Same seller + (hash match, SSCD ≥ 0.4802, or text match) | **REVIEW** | `same_seller_repost` (legitimate seller relisting inventory) |
+| **Text Only** | Text Cosine ≥ 0.92 without image match | **REVIEW** | `text_near_dup` (text alone **never** auto-blocks) |
+| **Single Vision Signal**| Hash match + SSCD in review band [0.2185, 0.4802] | **REVIEW** | `hash_hit` + `embedding_in_review_band` |
+| **Borderline Visual** | SSCD in review band [0.2185, 0.4802] alone | **REVIEW** | `embedding_in_review_band` |
+| **No Corroboration** | Below review band (< 0.2185) and no hash/id hits | **ALLOW** | Clear / unique listing |
+
+##### Backend Shadow Mode Integration
+
+The Node.js backend communicates with `dupdetect v2` via `backend/src/services/dupClient.js`:
+- **Fail-Open Contract:** If the v2 service is unreachable or errors out, `dupClient` safely resolves to `null` and logs a warning; listing creation or moderation is never blocked.
+- **Shadow Mode Logging:** Enabled by default (`DUPDETECT_SHADOW=true`). The `imageProcessor` BullMQ worker evaluates the cover image and text, then logs:
+  `[DupClient][SHADOW] product=<id> decision=<block|review|allow> score=<sim> match=<id> reasons=[...] legacy=<v1-decision>`
+- **Tombstone Hooks:** When a seller deletes their listing (`DELETE /api/products/:id`) or an admin removes a listing (`DELETE /api/admin/products/:id`), `dupClient.deleteListing(productId)` is triggered asynchronously, moving the listing record to the v2 service's tombstone registry.
+
 #### Empirical Validation Summary
 
+##### 1. pHash Validation (Node.js Baseline)
 Numbers below are from `backend/scripts/phash_validation_results.md` (validated on a 24-image corpus: 276 different-product pairs, 120 same-item variant pairs):
 
 - **Threshold retained:** `HASH_SIMILARITY_THRESHOLD = 12` (64-bit DCT pHash) — still the single source of truth for `fraudDetection.js` and the upload/edit duplicate gate.
@@ -924,7 +998,26 @@ Numbers below are from `backend/scripts/phash_validation_results.md` (validated 
 - **Rotation recall:** **96 / 96** rotation cases (90/180/270) matched under the rotation-aware probe set.
 - **Flipped images:** mean Hamming distance between an image and its horizontal flip = **27.17** (minimum **16**); the mirror hash closes this evasion path.
 
-**Honest limits of pHash.** pHash is not invariant to large crops, perspective warps, screenshots-of-screenshots, or arbitrary geometric edits. When Sharp is unavailable, the fallback is a SHA-256-derived value; the pHash comparator recognizes and skips that non-perceptual value, so it contributes no pHash duplicate match (§18 item 3). pHash is therefore a cheap gate, not a complete solution: the pipeline layers stored-vector fingerprinting and text checks on top, and caps every scan so coverage loss is explicit. See **§18 Theoretical Limitations & Mitigations** for the full inventory (notably items 1–3, 11, 12, 15).
+##### 2. Meta SSCD Validation (DupDetect v2)
+Calibrated on an adversarial evaluation suite (`ml-service/pipeline/dupdetect/thresholds.json`) testing extreme image transformations that defeat classic pHash:
+
+- **Calibrated Thresholds:** `block_thr = 0.4802`, `review_from = 0.2185`, `review_to = 0.5602`.
+- **Adversarial Transformation Recall:**
+
+| Image Transform Variant | Adversarial Perturbation Tested | SSCD Recall |
+|---|---|---:|
+| `crop35` | 35% bounding crop of the product | **100.0%** |
+| `rotate15` | 15° arbitrary rotation with edge fill | **100.0%** |
+| `color_shift` | Hue, saturation, and contrast shift | **100.0%** |
+| `watermark` | Semi-transparent text overlay across center | **100.0%** |
+| `mirror` | Horizontal flip | **100.0%** |
+| `screenshot` | Device frame + UI elements around photo | **100.0%** |
+| `collage` | Multi-image grid assembly | **100.0%** |
+| `crop_mirror` | Combined 35% crop + horizontal flip | **100.0%** |
+| `rotate_color` | Combined 15° rotation + color shift | **100.0%** |
+| `watermark_crop` | Watermark overlay + aggressive crop | **100.0%** |
+
+**Comparison with pHash limits:** While pHash provides a fast O(1) gate for identical or slightly re-compressed images, it fails on crops and perspective warps. Meta SSCD retains **100% recall** across these evasive transforms, making the 2-signal combination robust against adversarial sellers.
 
 #### How to See It Live
 
@@ -1033,6 +1126,10 @@ risk but can never alone reach `high` or auto-flag a seller.
 | 24 | **Logarithmic Scaling `log10(n+1)`** | Trust | Anti-gaming sales component of the trust score | `backend/src/services/trustScore.js` → `calculateTrustScore()` | `salesScore = clamp(log10(salesCount+1) × 10, 0, 20)`; concentration over up to **20** recent sales: `ratio = 1 − uniqueBuyers/N`, where `N` is the actual number returned; `>0.6` caps sales points at **10** | Design choice; not benchmarked |
 | 25 | **Confidence Fusion (MobileNet + keyword agreement)** | Image | Auto-categorisation of a listing | `backend/src/services/computerVision.js` → `classifyProduct()` | Keyword score **+2 per matched keyword** over lowercased filename+title (8 category lists); model threshold **0.15**; model+keyword agreement adds **0.10** when model is over threshold (cap **0.95**); sub-threshold agreement uses `min(0.95, max(modelConfidence, 0.4 + keywordScore×0.1))`; keyword-only uses `min(0.95, 0.4 + keywordScore×0.1)` | Unit-tested; no benchmark |
 | 26 | **HMAC-SHA256 (salted) identifier registry** | Identity | Privacy-preserving identifier registry | `backend/src/services/provenance.js` → `hashIdentifier()`, `computeEventHash()` | Normalise (IMEI = 15 digits, VIN = 17 alnum, serial ≥ 4 alnum) → `crypto.createHmac('sha256', IDENTIFIER_HASH_SALT).update(normalized).digest('hex')`; unset salt → constant fallback **with a warning**; legacy bare-SHA-256 lookup migrates records in place; provenance chain `SHA256(prevHash \| eventType \| ownerId \| listingId \| transactionId \| timestampISO)`; possession code = 6 chars from a 32-char alphabet, **24h TTL**, `timingSafeEqual` comparison, lock after **5** failed attempts | Unit-tested (migration, possession, chain verification) |
+| 27 | **Meta SSCD Copy Detection (512-D ViT/ResNet)** | Image | Deep near-duplicate and transformed copy detection | `ml-service/pipeline/dupdetect/embeddings.py` → `SSCDEmbedder` | Meta official TorchScript checkpoint (`sscd_disc_mixup.torchscript.pt`), 512-D L2-normalized descriptor. Bicubic resize(288) → CenterCrop(288) → ImageNet normalization. Thresholds: `block_thr = 0.4802`, `review_from = 0.2185`. HNSW approximate nearest-neighbour search | **Validated**: 100% recall across 10 adversarial transform variants (`thresholds.json`) |
+| 28 | **256-bit PDQ Perceptual Hashing & MIH** | Image | Fast binary perceptual hash with quality weighting | `ml-service/pipeline/dupdetect/hashing.py` → `compute_pdq`, `MIHIndex` | 256-bit hex from `pdqhash.compute()`; quality score 0–100 (`MIN_PDQ_QUALITY = 20`); Hamming distance ≤ 32 (`PDQ_MATCH_MAX_DIST`). Multi-Index Hashing (MIH) with 16 nibbles × 16 buckets guarantees sub-millisecond retrieval for radius ≤ 15 | Empirical verification on PDQ benchmarks |
+| 29 | **Multi-Signal Two-Gate Decision Rule** | Multi-modal | 2-signal cross-seller gating & tombstone enforcement | `ml-service/pipeline/dupdetect/pipeline.py` → `DuplicatePipeline.query()` | Cross-seller BLOCK requires **2 independent signals** (hash + SSCD, hash + text, SSCD + text) OR tombstone repost (hash / SSCD ≥ 0.4802) OR hardware identifier match + SSCD ≥ 0.2185. Single signals or same-seller yield REVIEW; text alone **never** blocks | Unit & pipeline tested |
+| 30 | **Hardware Identifier Extraction (Luhn-checked IMEI & Serial)** | Identity | Physical product identifier reuse detection in text | `ml-service/pipeline/dupdetect/pipeline.py` → `extract_identifiers()` | Regex `\b\d{15}\b` validated via Luhn checksum algorithm (`_luhn_ok`); Serial regex `\b[A-Z0-9-]{8,20}\b` with alphanumeric constraints. Matches trigger `identifier_match` block when visual evidence supports | Validated against GSMA IMEI spec & mock suites |
 
 #### PART B — Pipeline Diagrams
 
@@ -1106,6 +1203,11 @@ Main-flow riskAssessment write completes (releases background visual check)
       -> wait for main-flow write -> assessVisualSimilarity()
       -> strongest pair cosine >= 0.90 / 0.97, candidate cap 200
       -> atomic supporting-risk update
+  |
+  +--> DupDetect v2 shadow hook (imageProcessor.js, post-save):
+       POST /dup/query (:8100) -> query SSCD + PDQ + identifiers + text
+       -> logShadowVerdict([DupClient][SHADOW])
+       -> POST /dup/add (:8100) -> register listing in memory store
   |
   v
 Enqueue priceAnalysisQueue "reprice" (delay 30s)
@@ -1460,11 +1562,21 @@ root, so tampering with the chain is detectable (§7.6, §12). *Limitation:* the
 rainbow-able hashes; and a hash lookup proves reuse, never possession — which is why the code challenge
 exists.
 
+**27. Meta SSCD (Self-Supervised Copy Detection)** — *Purpose:* robust, learned image copy detection invariant to crops, rotations, color shifts, screenshots, watermarks, and collages that defeat pHash. *How:* Meta's official TorchScript model (`sscd_disc_mixup.torchscript.pt`) maps an input image to an L2-normalized 512-D descriptor. The input is resized bicubic to 288×288, center-cropped to 288×288, and normalized with ImageNet parameters. Vector comparisons use dot product (cosine similarity) indexed with FAISS HNSW. Measured calibration establishes `block_thr = 0.4802` and `review_from = 0.2185` (§7.11, §8.6). *Limitation:* deep models require GPU/CPU inference latency (~50–150ms per image) and weight download (~100MB), which is why it runs asynchronously in the Python microservice rather than on every inline web upload.
+
+**28. 256-bit PDQ Perceptual Hashing & Multi-Index Hashing (MIH)** — *Purpose:* fast binary visual hashing with quality assessment and sub-millisecond candidate lookup. *How:* `pdqhash.compute()` produces 256 bits of frequency domain hashes plus an image quality score (0–100). Matches require Hamming distance ≤ 32 and quality ≥ 20. Candidate retrieval is accelerated using Multi-Index Hashing (MIH) with 16 nibbles (16 buckets), which guarantees exact sub-millisecond retrieval within Hamming radius ≤ 15 (§7.11, §8.6). *Limitation:* like pHash, PDQ is susceptible to aggressive cropping (>35%) or non-affine distortions, where SSCD takes over.
+
+**29. Multi-Signal Two-Gate Decision Rule** — *Purpose:* eliminate single-signal false positive blocks while aggressively catching stolen listings and repost-after-delete evasions. *How:* the v2 pipeline evaluates five independent signals (multi-hash, SSCD embedding, hardware identifiers, text fusion, and tombstone records). A cross-seller `block` requires **two independent corroborating signals** (e.g. hash_hit + embedding_above_block, hash_hit + text_hit, or embedding_above_block + text_hit), OR a tombstone repost (hash or SSCD ≥ 0.4802), OR an identifier match with SSCD in the review band (≥ 0.2185). Text alone **never** blocks (maximum verdict `review`). Same-seller near-matches trigger `review` (`same_seller_repost`) to avoid blocking sellers updating their listings (§7.11, §8.6). *Limitation:* an adversary possessing the physical item who uses a stolen photo and distinct text can still trigger a block without manual appeal.
+
+**30. Hardware Identifier Extraction with Luhn Check** — *Purpose:* extract and validate physical equipment serials and IMEIs embedded in listing titles and descriptions. *How:* `extract_identifiers()` applies regex `\b\d{15}\b` for IMEIs and validates them against the Luhn mod-10 checksum algorithm (`_luhn_ok`); serial numbers require 8–20 uppercase alphanumerics matching `(?=[A-Z0-9]*\d)(?=[A-Z0-9]*[A-Z])`. Matched identifiers are prefixed (`imei:...`, `ser:...`) and checked across listings. Matches trigger `identifier_match` block when visual evidence supports (§7.6, §7.11, §8.6). *Limitation:* sellers who fail to mention the serial in the text cannot be matched by this layer.
+
 ---
 
-## 8. ML Microservice (Python / FastAPI)
+## 8. ML Microservices (Python / FastAPI)
 
-**Location:** `ml-service/` · **Port:** 8000 · **API Docs:** http://localhost:8000/docs
+The platform runs two specialized Python FastAPI services:
+1. **Core ML Service (Port 8000)**: CLIP ViT-B/32 multimodal embeddings, LightGBM fraud detection v2, kNN quantile price recommendation, and FAISS HNSW ANN search (`main.py` · Docs: http://localhost:8000/docs).
+2. **DupDetect v2 Service (Port 8100)**: Meta SSCD copy detection, 256-bit PDQ + pHash multi-hashing, hardware identifier extraction, text fusion, and tombstone lifecycle management (`pipeline/dupdetect/api.py` · Docs: http://localhost:8100/docs).
 
 ### 8.1 CLIP Embeddings
 
@@ -1616,6 +1728,89 @@ GET /pipeline-stats
   }
 ```
 
+### 8.6 DupDetect v2 Service (SSCD + Multi-Hash + Text Fusion)
+
+**Location:** `ml-service/pipeline/dupdetect/` · **Port:** 8100 · **API Docs:** http://localhost:8100/docs · **Service Module:** `dupdetect.api:app`
+
+`dupdetect v2` is a dedicated duplicate detection microservice that runs on port 8100 alongside the core ML service. It implements a **5-signal multimodal copy detection pipeline** combining perceptual hashing, deep copy embeddings, hardware identifier parsing, and CLIP text similarity with a **2-signal gating policy** and **tombstone support** to prevent repost-after-delete evasion.
+
+#### Endpoints
+
+| Method | Path | Request Body | Response / Effect |
+|---|---|---|---|
+| `GET` | `/health` | — | Returns `{"ok": true, "model": "sscd", "signals": ["hash", "embedding", "identifier", "text"]}` |
+| `POST` | `/dup/add` | `{ listing_id, seller_id, image_b64, title, description }` | Computes hashes, SSCD embedding, and identifiers; registers the record in the in-memory HNSW and MIH indices. Returns `result: {...}` |
+| `POST` | `/dup/query` | `{ listing_id, seller_id, image_b64, title, description }` | Evaluates the 5 signals against active and tombstoned listings. Returns `{ decision: "block" \| "review" \| "allow", score, match, reasons: [...] }` |
+| `POST` | `/dup/delete` | `{ listing_id }` | Marks the listing as a tombstone in the vector and hash stores. Subsequent reposts continue to match against it. |
+
+#### The 5 Detection Signals
+
+1. **Multi-Hash Set Probing (pHash D4 + 256-bit PDQ):**
+   - **pHash Variants:** Computes 6 dihedral group $D_4$ transforms (plain, mirror, r90, r180, r270, vflip) using `imagehash`.
+   - **PDQ Hash:** Computes a 256-bit PDQ perceptual hash (`pdqhash`) with quality score ($Q \ge 20$, Hamming distance $\le 32$).
+   - **Fast Indexing:** Uses `MIHIndex` (Multi-Index Hashing, 16 buckets) and BK-tree for sub-millisecond candidate lookup.
+2. **Deep Copy Detection (Meta SSCD 512-D):**
+   - Uses Meta's official TorchScript model (`sscd_disc_mixup.torchscript.pt`), generating an L2-normalized 512-D descriptor trained with mixup entropy regularization specifically for near-duplicate and transformed copy detection.
+   - Preprocessing: bicubic resize to 288×288, center-crop to 288×288, and standard ImageNet normalization.
+   - Indexed via in-process HNSW index (`ANNIndex`).
+   - Calibrated thresholds: `block_thr = 0.4802`, `review_from = 0.2185`.
+3. **Hardware Identifiers (IMEI & Serial Extraction):**
+   - Regex-extracts 15-digit IMEIs (`\b\d{15}\b`) and validates them using the Luhn mod-10 checksum algorithm.
+   - Regex-extracts serial numbers (`\b[A-Z0-9-]{8,20}\b`).
+   - Matching a cataloged physical identifier with visual similarity $\ge 0.2185$ produces an immediate **BLOCK** (`identifier_match`).
+4. **Multimodal Text Fusion (OpenCLIP ViT-B/32):**
+   - Uses OpenCLIP ViT-B/32 text embeddings to compute cosine similarity between listing descriptions.
+   - Cosine similarity $\ge 0.92$ triggers `text_hit`.
+   - **Text alone never auto-blocks**; it requires corroboration from a vision signal or raises a `review` verdict.
+5. **Lifecycle & Repost-After-Delete Tombstones:**
+   - When a listing is deleted by a seller or an admin, `POST /dup/delete` marks its record as a tombstone.
+   - Hashes and embeddings remain in memory flagged with `tombstone: true`.
+   - An adversary who deletes their listing and immediately reposts it with new text will match the tombstone and receive a **BLOCK** (`repost_after_delete`).
+
+#### 2-Signal Gating Policy
+
+To avoid false-positive blocks, cross-seller rejections strictly require **two independent corroborating signals**:
+
+```python
+# 2-signal cross-seller block condition (pipeline.py)
+if not same_seller and (
+    (hash_hit and sim >= self.block_thr) or
+    (hash_hit and text_hit) or
+    (sim >= self.block_thr and text_hit)
+):
+    return {"decision": "block", "score": round(max(sim, text_sim), 3), "match": lid, "reasons": reasons}
+```
+
+- **BLOCK**:
+  - `repost_after_delete`: Tombstone hit with hash match or SSCD $\ge 0.4802$.
+  - `identifier_match`: Exact physical IMEI/Serial match with SSCD in the review band ($\ge 0.2185$).
+  - `hash_hit` + `embedding_above_block` (SSCD $\ge 0.4802$).
+  - `hash_hit` + `text_hit` (Text cosine $\ge 0.92$).
+  - `embedding_above_block` (SSCD $\ge 0.4802$) + `text_hit` (Text cosine $\ge 0.92$).
+- **REVIEW**:
+  - `same_seller_repost`: Same seller matches on hash, embedding, or text (relisting inventory).
+  - `text_near_dup`: Near-duplicate text alone without visual corroboration.
+  - `hash_hit` + SSCD in review band $[0.2185, 0.4802]$.
+  - SSCD alone in review band $[0.2185, 0.4802]$.
+- **ALLOW**:
+  - No matching candidate or scores below the review band.
+
+#### Backend Shadow Mode Integration
+
+- **Client:** `backend/src/services/dupClient.js`
+- **Fail-open design:** Network timeouts or service errors resolve to `null` without throwing, ensuring listing creation never stalls.
+- **Worker hook:** `backend/src/workers/imageProcessor.js` queries `dupClient.queryDuplicate()` after persisting the listing, logs verdicts as `[DupClient][SHADOW]`, and registers the listing via `dupClient.addListing()`.
+- **Deletion hooks:** `productController.js` (seller deletion) and `adminController.js` (admin deletion) call `dupClient.deleteListing()` to create tombstones.
+
+#### Running the Service
+
+```bash
+cd ml-service/pipeline
+uvicorn dupdetect.api:app --host 127.0.0.1 --port 8100
+```
+
+> **Note:** Keep a single uvicorn worker process because the HNSW index, MIH buckets, and tombstone records live in process memory.
+
 ---
 
 ## 9. Real-Time Features
@@ -1657,6 +1852,7 @@ Triggered when a new product is created. Full processing pipeline:
 10. Run description exact/near-duplicate, scam-text, image-text, category-agreement,
     cross-category and listing-velocity signals, then unified fraud risk scoring + v1/v2 fusion
 11. Update `product.aiAnalysis` in MongoDB
+12. Query DupDetect v2 service (shadow hook on port 8100), log structured shadow verdict, and register listing in the v2 memory store
 
 > The list above is the conceptual summary (§7.1). The exact execution order — including the
 > parallel CV batch and the non-blocking `setImmediate` CNN/visual block — is traced step by
@@ -1813,6 +2009,13 @@ ML_SERVICE_URL=http://localhost:8000
 # Blends local heuristic price with ML-service estimate (0-1, 0.7 = 70% ML)
 ML_BLEND_WEIGHT=0.7
 
+# ─────────────── DupDetect v2 Service ─────────
+# Python FastAPI copy detection service (port 8100)
+DUPDETECT_SERVICE_URL=http://localhost:8100
+# Shadow mode (default true): logs verdicts as [DupClient][SHADOW] without altering listing status
+DUPDETECT_SHADOW=true
+DUPDETECT_TIMEOUT_MS=15000
+
 # ─────────────── Cloudinary ───────────
 # Required for image upload to work
 CLOUDINARY_CLOUD_NAME=your_cloud_name
@@ -1929,10 +2132,14 @@ npm run dev
 cd frontend
 npm run dev
 
-# Terminal 3 — ML Service (port 8000, optional)
+# Terminal 3 — Core ML Service (port 8000, optional)
 cd ml-service
 .venv\Scripts\activate
 uvicorn main:app --reload --port 8000
+
+# Terminal 4 — DupDetect v2 Service (port 8100, optional)
+cd ml-service/pipeline
+uvicorn dupdetect.api:app --host 127.0.0.1 --port 8100
 ```
 
 ### 4. Access the Application
@@ -1941,12 +2148,15 @@ uvicorn main:app --reload --port 8000
 |---|---|---|
 | Frontend | http://localhost:3000 | React app |
 | Backend API | http://localhost:5000 | REST API |
-| ML Service | http://localhost:8000 | Python FastAPI |
-| ML API Docs | http://localhost:8000/docs | Swagger UI |
-| ML Health | http://localhost:8000/health | Health check |
+| Core ML Service | http://localhost:8000 | Python FastAPI (CLIP / LightGBM / Price v2) |
+| Core ML Docs | http://localhost:8000/docs | Swagger UI |
+| Core ML Health | http://localhost:8000/health | Health check |
+| DupDetect v2 | http://localhost:8100 | Python FastAPI (SSCD / PDQ / Identifiers) |
+| DupDetect Docs | http://localhost:8100/docs | Swagger UI |
+| DupDetect Health | http://localhost:8100/health | Health check |
 | Backend Health | http://localhost:5000/health | Health check |
 
-> **Graceful degradation:** The app works without Redis (queues disabled) and without the ML service (falls back to heuristic-only analysis). Only Cloudinary is required for image functionality.
+> **Graceful degradation:** The app works without Redis (queues disabled) and without the ML services (falls back to heuristic-only analysis). Only Cloudinary is required for image functionality.
 
 ---
 
