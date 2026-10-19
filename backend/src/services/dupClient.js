@@ -42,7 +42,8 @@ async function queryDuplicate({ listingId, sellerId, imageBuffer, title = '', de
       title: title || '',
       description: description || '',
     });
-    return res.data || null;
+    const body = res.data || null;
+    return body && body.result ? body.result : body;
   } catch (err) {
     console.warn(`[DupClient] query failed for ${listingId || 'n/a'}: ${err.message}`);
     return null;
