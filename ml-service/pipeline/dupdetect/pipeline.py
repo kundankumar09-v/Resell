@@ -33,6 +33,7 @@ class DuplicatePipeline:
     def __init__(self, thr_path="thresholds.json", model="sscd"):
         t = json.load(open(thr_path))
         self.block_thr, self.review_from = t["block_thr"], t["review_from"]
+        self.block_solo_thr = t.get("block_solo_thr", 0.80)
         self.model_name = model
         self.store = HashStore()
         self.ann = None
@@ -83,6 +84,23 @@ class DuplicatePipeline:
         hash_hits = self.store.search(hashes, include_tombstones=True, top_k=top_k)
         self._ensure_ann(vec.shape[0])
         ann_hits = self.ann.search(vec, k=top_k, include_tombstones=True)
+        try:  # crop-variant probing - catches screenshots / collages / borders
+            pre_img = preprocess_image(image).image
+            pw, ph_ = pre_img.size
+            side = min(pw, ph_)
+            crops = []
+            for frac in (0.8, 0.65):
+                s = int(side * frac)
+                crops.append(pre_img.crop(((pw - s) // 2, (ph_ - s) // 2,
+                                           (pw + s) // 2, (ph_ + s) // 2)))
+            best = {n.key: n for n in ann_hits}
+            for cv in self._embedder().embed_batch(crops):
+                for n in self.ann.search(cv, k=top_k, include_tombstones=True):
+                    if n.key not in best or n.similarity > best[n.key].similarity:
+                        best[n.key] = n
+            ann_hits = list(best.values())
+        except Exception:
+            pass
 
         cands = {}
         for h in hash_hits:
@@ -119,11 +137,18 @@ class DuplicatePipeline:
                 return {"decision": "block", "score": round(sim, 3), "match": lid,
                         "reasons": ["identifier_match", f"sim={sim:.3f}"]}
             # 2-signal cross-seller blocks: hash+embed | hash+text | embed+text
-            if not same_seller and ((hash_hit and sim >= self.block_thr) or
+            # solo-ultra: an embedding this close is a copy by itself (FPR ~0
+            # at >= 0.80 on measured negatives) - screenshots/collages with
+            # chrome defeat hash and text, so the embedding must stand alone.
+            solo = sim >= getattr(self, "block_solo_thr", 0.80)
+            if not same_seller and (solo or
+                                    (hash_hit and sim >= self.block_thr) or
                                     (hash_hit and text_hit) or
                                     (sim >= self.block_thr and text_hit)):
                 if hash_hit: reasons.append("hash_hit")
                 if sim >= self.block_thr: reasons.append("embedding_above_block")
+                if solo and not hash_hit and not text_hit:
+                    reasons.append("embedding_solo_ultra")
                 if text_hit: reasons.append(f"text={text_sim:.3f}")
                 return {"decision": "block", "score": round(max(sim, text_sim), 3), "match": lid, "reasons": reasons}
             if same_seller and (hash_hit or sim >= self.block_thr or text_hit):

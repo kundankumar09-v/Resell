@@ -15,5 +15,6 @@
     "rotate_color": 100.0,
     "watermark_crop": 100.0
   },
-  "n_images": 20
+  "n_images": 20,
+  "block_solo_thr": 0.8
 }
