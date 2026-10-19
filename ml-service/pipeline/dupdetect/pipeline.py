@@ -74,6 +74,7 @@ class DuplicatePipeline:
         """Tombstone: hashes + embedding stay searchable (repost-after-delete)."""
         self.store.delete_listing(listing_id)
         if self.ann is not None: self.ann.mark_deleted(listing_id)
+        return {"ok": True}
 
     def query(self, seller_id, image, title="", description="", top_k=5):
         hashes = ImageHashes.compute(preprocess_image(image).image)
