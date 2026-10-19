@@ -42,7 +42,7 @@ class SSCDEmbedder(BaseEmbedder):
         if not os.path.exists(cache):
             os.makedirs(os.path.dirname(cache), exist_ok=True)
             print("  [sscd] downloading checkpoint (~100MB)...")
-            urllib = __import__("urllib.request", fromlist=["urlretrieve"])
+            import urllib.request
             tmp = cache + ".part"; urllib.request.urlretrieve(self.URL, tmp); os.replace(tmp, cache)
         self._model = torch.jit.load(cache).eval().to(self.device)
         self._tf = _imagenet_transform(288)
